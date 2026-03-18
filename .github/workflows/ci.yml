@@ -1,0 +1,30 @@
+name: Validate Pine Scripts
+
+on:
+  push:
+    branches: ["*"]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Validate examples/smc_reversal.pine
+        run: python pinescript_ai.py validate examples/smc_reversal.pine
+
+      - name: Validate examples/mtf_confluence.pine
+        run: python pinescript_ai.py validate examples/mtf_confluence.pine
+
+      - name: Validate examples/confluence_scorer.pine
+        run: python pinescript_ai.py validate examples/confluence_scorer.pine

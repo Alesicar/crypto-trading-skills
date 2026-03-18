@@ -1,5 +1,35 @@
+// ============================================================
+// Confluence Scorer Strategy — Point-Based Multi-Factor System
+// ============================================================
+// Awards points for multiple Smart Money Concepts and technical
+// factors. Only enters a trade when the confluence score meets
+// or exceeds a configurable minimum threshold (default: 4).
+//
+// Scoring breakdown (long side):
+//   +2  Bullish CHoCH detected within last 10 bars
+//   +2  Price is inside a bullish Order Block zone
+//   +1  Bullish Fair Value Gap present (unfilled)
+//   +1  Price in discount zone (below 50% of range)
+//   +1  RSI below midline (momentum has room to run)
+//   +1  Volume above 20-period average (participation confirms move)
+//   ---
+//   Max possible score: 8
+//
+// Short side mirrors with bearish equivalents.
+//
+// Risk management: ATR-based stop loss, 2R take-profit target.
+// Visualization: score labels on chart at entries, score histogram
+//   in a separate pane with threshold lines.
+//
+// Anti-repainting: barstate.isconfirmed on all entries.
+// Anti-lookahead: no request.security used in this version.
+// Realistic costs: 0.06% commission, 2-tick slippage.
+//
+// Best on: 15m–1H crypto charts.
+// ============================================================
+
 //@version=6
-strategy("Confluence Scorer — Multi-Factor Entry System", overlay=true,
+strategy("Confluence Scorer — Multi-Factor Entry", overlay=true,
          initial_capital=10000,
          default_qty_type=strategy.percent_of_equity, default_qty_value=100,
          commission_type=strategy.commission.percent, commission_value=0.06,
@@ -7,59 +37,74 @@ strategy("Confluence Scorer — Multi-Factor Entry System", overlay=true,
          pyramiding=0)
 
 // ============================================================
-// Inputs
+// STEP 1: User Inputs
 // ============================================================
-// Structure
-swing_len     = input.int(5, "Swing Lookback", minval=2, maxval=20, group="Structure")
-ob_lookback   = input.int(20, "OB Search Bars", minval=5, maxval=50, group="Structure")
+// --- Structure ---
+swing_len   = input.int(5, "Swing Lookback", minval=2, maxval=20,
+              tooltip="Bars on each side for swing point detection",
+              group="Structure")
+ob_lookback = input.int(20, "OB Search Bars", minval=5, maxval=50,
+              tooltip="How far back to search for Order Block candle after CHoCH",
+              group="Structure")
+choch_window = input.int(10, "CHoCH Recency Window", minval=3, maxval=30,
+               tooltip="CHoCH must have occurred within this many bars to score points",
+               group="Structure")
 
-// Confluence
-min_long_score  = input.int(4, "Min Long Score", minval=1, maxval=8, group="Confluence")
-min_short_score = input.int(4, "Min Short Score", minval=1, maxval=8, group="Confluence")
+// --- Confluence ---
+min_long_score  = input.int(4, "Min Long Score", minval=1, maxval=8,
+                  tooltip="Minimum confluence score required for a long entry",
+                  group="Confluence")
+min_short_score = input.int(4, "Min Short Score", minval=1, maxval=8,
+                  tooltip="Minimum confluence score required for a short entry",
+                  group="Confluence")
 
-// Risk
-atr_len     = input.int(14, "ATR Length", group="Risk")
-atr_sl_mult = input.float(1.5, "ATR SL Multiplier", step=0.1, group="Risk")
-rr_ratio    = input.float(2.0, "Risk:Reward Ratio", step=0.1, group="Risk")
+// --- Risk ---
+atr_len     = input.int(14, "ATR Length", group="Risk Management")
+atr_sl_mult = input.float(1.5, "ATR SL Multiplier", step=0.1, minval=0.5,
+              tooltip="Stop loss distance = ATR * this multiplier",
+              group="Risk Management")
+rr_target   = input.float(2.0, "Risk:Reward Target", step=0.1, minval=1.0,
+              tooltip="Take profit = entry + risk_distance * this value",
+              group="Risk Management")
 
-// Zones
-range_len = input.int(50, "Range Lookback", minval=20, group="Zones")
+// --- Zone Filter ---
+range_len = input.int(50, "Range Lookback", minval=20,
+            tooltip="Lookback for premium/discount zone calculation",
+            group="Zone Filter")
 
-// Volume
-vol_mult = input.float(1.2, "Volume Threshold Multiplier", step=0.1, group="Volume")
+// --- RSI ---
+rsi_len = input.int(14, "RSI Length", group="RSI")
+
+// --- Volume ---
 vol_len  = input.int(20, "Volume MA Length", group="Volume")
-
-// HTF
-htf_tf = input.timeframe("60", "Higher TF for Trend", group="Multi-TF")
+vol_mult = input.float(1.0, "Volume Threshold", step=0.1,
+           tooltip="Volume must exceed SMA(volume) * this to score a point",
+           group="Volume")
 
 // ============================================================
-// Core Calculations
+// STEP 2: Core Indicator Calculations
 // ============================================================
 atr_val = ta.atr(atr_len)
+rsi_val = ta.rsi(close, rsi_len)
 vol_ma  = ta.sma(volume, vol_len)
+
+// Volume above average check
 vol_above_avg = volume > vol_ma * vol_mult
 
 // ============================================================
-// Premium / Discount Zones
+// STEP 3: Premium / Discount Zones
 // ============================================================
+// The range high/low define the playing field. Equilibrium is the
+// 50% level. Longs in discount (below EQ) are higher probability;
+// shorts in premium (above EQ) are higher probability.
 range_high  = ta.highest(high, range_len)
 range_low   = ta.lowest(low, range_len)
-equilibrium = (range_high + range_low) / 2
+equilibrium = (range_high + range_low) / 2.0
 in_discount = close < equilibrium
 in_premium  = close > equilibrium
 
 // ============================================================
-// Higher Timeframe Trend (via request.security)
-// ============================================================
-htf_ema_fast = request.security(syminfo.tickerid, htf_tf, ta.ema(close, 20),
-                                 barmerge.gaps_off, barmerge.lookahead_off)
-htf_ema_slow = request.security(syminfo.tickerid, htf_tf, ta.ema(close, 50),
-                                 barmerge.gaps_off, barmerge.lookahead_off)
-htf_bullish = htf_ema_fast > htf_ema_slow
-htf_bearish = htf_ema_fast < htf_ema_slow
-
-// ============================================================
-// Market Structure — Swing Points
+// STEP 4: Market Structure — Swing Points
 // ============================================================
 var float last_sh = na
 var float last_sl = na
@@ -73,182 +118,210 @@ if not na(pl)
     last_sl := pl
 
 // ============================================================
-// Trend via Structure
+// STEP 5: Trend Direction from Structure
 // ============================================================
-var int trend = 0
+// Determined by comparing successive swing points.
+var int   trend   = 0
 var float prev_sh = na
 var float prev_sl = na
 
 if not na(ph)
     if not na(prev_sh)
-        trend := ph > prev_sh ? 1 : -1
+        if ph > prev_sh
+            trend := 1    // Higher high → bullish structure
+        else if ph < prev_sh
+            trend := -1   // Lower high → bearish structure
     prev_sh := ph
 
 if not na(pl)
     if not na(prev_sl)
-        trend := pl > prev_sl ? 1 : -1
+        if pl > prev_sl
+            trend := 1    // Higher low → bullish structure
+        else if pl < prev_sl
+            trend := -1   // Lower low → bearish structure
     prev_sl := pl
 
 // ============================================================
-// CHoCH Detection
+// STEP 6: CHoCH Detection
 // ============================================================
+// CHoCH = break against the prevailing trend. It's the first
+// signal that momentum is shifting. We track recency because
+// a CHoCH from 50 bars ago is stale — we want fresh reversals.
 bullish_choch = trend == -1 and not na(last_sh) and close > last_sh and barstate.isconfirmed
 bearish_choch = trend == 1 and not na(last_sl) and close < last_sl and barstate.isconfirmed
 
-// Track recent CHoCH (within last N bars)
+// Track bars since last CHoCH for recency scoring
 var int bars_since_bull_choch = 999
 var int bars_since_bear_choch = 999
 
 bars_since_bull_choch := bullish_choch ? 0 : bars_since_bull_choch + 1
 bars_since_bear_choch := bearish_choch ? 0 : bars_since_bear_choch + 1
 
-recent_bull_choch = bars_since_bull_choch <= 10
-recent_bear_choch = bars_since_bear_choch <= 10
+recent_bull_choch = bars_since_bull_choch <= choch_window
+recent_bear_choch = bars_since_bear_choch <= choch_window
 
 // ============================================================
-// Order Block Detection
+// STEP 7: Order Block Detection
 // ============================================================
-var float bull_ob_top = na
+// After CHoCH, we find the OB by walking back to the last
+// opposing candle before the impulse move.
+var float bull_ob_top    = na
 var float bull_ob_bottom = na
-var bool bull_ob_active = false
+var bool  bull_ob_active = false
 
-var float bear_ob_top = na
+var float bear_ob_top    = na
 var float bear_ob_bottom = na
-var bool bear_ob_active = false
+var bool  bear_ob_active = false
 
+// Bullish OB: last bearish candle before bullish CHoCH impulse
 if bullish_choch
     for i = 1 to ob_lookback
         if close[i] < open[i]
-            bull_ob_top := high[i]
+            bull_ob_top    := high[i]
             bull_ob_bottom := low[i]
             bull_ob_active := true
             break
 
+// Bearish OB: last bullish candle before bearish CHoCH impulse
 if bearish_choch
     for i = 1 to ob_lookback
         if close[i] > open[i]
-            bear_ob_top := high[i]
+            bear_ob_top    := high[i]
             bear_ob_bottom := low[i]
             bear_ob_active := true
             break
 
-// Price in OB zone
+// Check if price is currently inside the OB zone
 in_bull_ob = bull_ob_active and low <= bull_ob_top and close >= bull_ob_bottom
 in_bear_ob = bear_ob_active and high >= bear_ob_bottom and close <= bear_ob_top
 
-// Mitigation
+// OB mitigation — invalidate when price closes through
 if bull_ob_active and close < bull_ob_bottom
     bull_ob_active := false
 if bear_ob_active and close > bear_ob_top
     bear_ob_active := false
 
 // ============================================================
-// Fair Value Gap Detection
+// STEP 8: Fair Value Gap (FVG) Detection
 // ============================================================
-bullish_fvg = low > high[2]
-bearish_fvg = high < low[2]
+// A 3-candle imbalance where price moved so fast it left a gap.
+// Bullish FVG: current bar's low > 2 bars ago high (gap up)
+// Bearish FVG: current bar's high < 2 bars ago low (gap down)
+bullish_fvg_detected = low > high[2]
+bearish_fvg_detected = high < low[2]
 
-// Track active FVG zones
-var float bull_fvg_top = na
-var float bull_fvg_bot = na
-var bool bull_fvg_active = false
+// Track active FVG zones for scoring
+var float bull_fvg_top    = na
+var float bull_fvg_bottom = na
+var bool  bull_fvg_active = false
 
-var float bear_fvg_top = na
-var float bear_fvg_bot = na
-var bool bear_fvg_active = false
+var float bear_fvg_top    = na
+var float bear_fvg_bottom = na
+var bool  bear_fvg_active = false
 
-if bullish_fvg
-    bull_fvg_top := low
-    bull_fvg_bot := high[2]
+if bullish_fvg_detected
+    bull_fvg_top    := low       // Top of the gap
+    bull_fvg_bottom := high[2]   // Bottom of the gap
     bull_fvg_active := true
 
-if bearish_fvg
-    bear_fvg_top := low[2]
-    bear_fvg_bot := high
+if bearish_fvg_detected
+    bear_fvg_top    := low[2]    // Top of the gap
+    bear_fvg_bottom := high      // Bottom of the gap
     bear_fvg_active := true
 
 // Check if price is in FVG zone
-in_bull_fvg = bull_fvg_active and low <= bull_fvg_top and close >= bull_fvg_bot
-in_bear_fvg = bear_fvg_active and high >= bear_fvg_bot and close <= bear_fvg_top
+in_bull_fvg = bull_fvg_active and low <= bull_fvg_top and close >= bull_fvg_bottom
+in_bear_fvg = bear_fvg_active and high >= bear_fvg_bottom and close <= bear_fvg_top
 
 // FVG fill = mitigated
-if bull_fvg_active and close < bull_fvg_bot
+if bull_fvg_active and close < bull_fvg_bottom
     bull_fvg_active := false
 if bear_fvg_active and close > bear_fvg_top
     bear_fvg_active := false
 
 // ============================================================
-// CONFLUENCE SCORING — Long
+// STEP 9: CONFLUENCE SCORING — Long Side
 // ============================================================
+// Each factor adds points. Higher score = more factors aligned
+// = higher probability setup. We reset score each bar.
 var int long_score = 0
 long_score := 0
 
-// +2: Recent bullish CHoCH
+// +2 points: Recent bullish CHoCH (within last N bars)
+// This is the primary reversal signal — worth the most points
 if recent_bull_choch
     long_score += 2
 
-// +2: Price in bullish Order Block
+// +2 points: Price is inside a bullish Order Block zone
+// OB is where institutions placed orders — high-value zone
 if in_bull_ob
     long_score += 2
 
-// +1: Bullish FVG present
+// +1 point: Bullish FVG present (unfilled imbalance)
+// Price tends to return to FVGs — adds confluence
 if in_bull_fvg
     long_score += 1
 
-// +1: In discount zone
+// +1 point: Price is in discount zone (below equilibrium)
+// Buying in discount = buying below fair value
 if in_discount
     long_score += 1
 
-// +1: Volume above average
+// +1 point: RSI below 50 (momentum has room to expand upward)
+if rsi_val < 50
+    long_score += 1
+
+// +1 point: Volume above average (market participation confirms)
 if vol_above_avg
     long_score += 1
 
-// +1: HTF trend bullish
-if htf_bullish
-    long_score += 1
-
 // ============================================================
-// CONFLUENCE SCORING — Short
+// STEP 10: CONFLUENCE SCORING — Short Side
 // ============================================================
 var int short_score = 0
 short_score := 0
 
-// +2: Recent bearish CHoCH
+// +2 points: Recent bearish CHoCH
 if recent_bear_choch
     short_score += 2
 
-// +2: Price in bearish Order Block
+// +2 points: Price is inside a bearish Order Block zone
 if in_bear_ob
     short_score += 2
 
-// +1: Bearish FVG present
+// +1 point: Bearish FVG present
 if in_bear_fvg
     short_score += 1
 
-// +1: In premium zone
+// +1 point: Price is in premium zone (above equilibrium)
 if in_premium
     short_score += 1
 
-// +1: Volume above average
+// +1 point: RSI above 50 (momentum has room to expand downward)
+if rsi_val > 50
+    short_score += 1
+
+// +1 point: Volume above average
 if vol_above_avg
     short_score += 1
 
-// +1: HTF trend bearish
-if htf_bearish
-    short_score += 1
-
 // ============================================================
-// Entry & Exit Logic
+// STEP 11: Entry & Exit Logic
 // ============================================================
+// Enter only when score meets minimum threshold AND bar is confirmed.
 long_entry  = long_score >= min_long_score and barstate.isconfirmed
 short_entry = short_score >= min_short_score and barstate.isconfirmed
 
-// Risk calculations
-long_sl  = close - atr_val * atr_sl_mult
-long_tp  = close + atr_val * atr_sl_mult * rr_ratio
-short_sl = close + atr_val * atr_sl_mult
-short_tp = close - atr_val * atr_sl_mult * rr_ratio
+// ATR-based stop loss and 2R take profit
+long_sl   = close - atr_val * atr_sl_mult
+long_risk = math.abs(close - long_sl)
+long_tp   = close + long_risk * rr_target
 
+short_sl   = close + atr_val * atr_sl_mult
+short_risk = math.abs(short_sl - close)
+short_tp   = close - short_risk * rr_target
+
+// Execute orders
 if long_entry
     strategy.entry("Long", strategy.long)
     strategy.exit("Exit Long", from_entry="Long", stop=long_sl, limit=long_tp)
@@ -258,38 +331,64 @@ if short_entry
     strategy.exit("Exit Short", from_entry="Short", stop=short_sl, limit=short_tp)
 
 // ============================================================
-// Visualization — Score Display
+// STEP 12: Visualization — Score Labels on Chart
 // ============================================================
-// Score labels on entries
+// Show score breakdown on the chart at each entry point so the
+// trader can see exactly which factors were active.
+
+// Build score breakdown string for long entries
 if long_entry
+    string long_detail = "LONG Score: " + str.tostring(long_score) + "/8"
+    long_detail += "\nCHoCH:" + (recent_bull_choch ? "+2" : "0")
+    long_detail += " OB:" + (in_bull_ob ? "+2" : "0")
+    long_detail += "\nFVG:" + (in_bull_fvg ? "+1" : "0")
+    long_detail += " Zone:" + (in_discount ? "+1" : "0")
+    long_detail += "\nRSI:" + (rsi_val < 50 ? "+1" : "0")
+    long_detail += " Vol:" + (vol_above_avg ? "+1" : "0")
     label.new(bar_index, low - atr_val,
-              "L:" + str.tostring(long_score),
+              long_detail,
               style=label.style_label_up, color=color.green,
               textcolor=color.white, size=size.small)
 
+// Build score breakdown string for short entries
 if short_entry
+    string short_detail = "SHORT Score: " + str.tostring(short_score) + "/8"
+    short_detail += "\nCHoCH:" + (recent_bear_choch ? "+2" : "0")
+    short_detail += " OB:" + (in_bear_ob ? "+2" : "0")
+    short_detail += "\nFVG:" + (in_bear_fvg ? "+1" : "0")
+    short_detail += " Zone:" + (in_premium ? "+1" : "0")
+    short_detail += "\nRSI:" + (rsi_val > 50 ? "+1" : "0")
+    short_detail += " Vol:" + (vol_above_avg ? "+1" : "0")
     label.new(bar_index, high + atr_val,
-              "S:" + str.tostring(short_score),
+              short_detail,
               style=label.style_label_down, color=color.red,
               textcolor=color.white, size=size.small)
 
-// Score histogram in separate pane
+// ============================================================
+// STEP 13: Visualization — Score Histogram (Separate Pane)
+// ============================================================
+// Long scores plot upward, short scores plot downward.
+// Threshold lines show the minimum required score.
 plot(long_score, "Long Score", color=color.new(color.green, 30),
-     style=plot.style_histogram, linewidth=2, display=display.pane)
+     style=plot.style_histogram, linewidth=3, display=display.pane)
 plot(-short_score, "Short Score", color=color.new(color.red, 30),
-     style=plot.style_histogram, linewidth=2, display=display.pane)
-hline(min_long_score, "Min Long Threshold", color=color.green, linestyle=hline.style_dashed)
-hline(-min_short_score, "Min Short Threshold", color=color.red, linestyle=hline.style_dashed)
-hline(0, "Zero", color=color.gray)
+     style=plot.style_histogram, linewidth=3, display=display.pane)
+hline(0, "Zero Line", color=color.gray, linestyle=hline.style_solid)
 
-// Equilibrium
-plot(equilibrium, "Equilibrium", color=color.new(color.gray, 60), linewidth=1)
+// ============================================================
+// STEP 14: Visualization — Chart Overlays
+// ============================================================
+// Equilibrium line
+plot(equilibrium, "Equilibrium", color=color.new(color.gray, 60),
+     linewidth=1, style=plot.style_cross)
 
-// Structure markers
+// Swing point markers
 plotshape(not na(ph), title="Swing High", style=shape.triangledown,
-          location=location.abovebar, color=color.new(color.red, 30), size=size.tiny)
+          location=location.abovebar, color=color.new(color.red, 30),
+          size=size.tiny, offset=-swing_len)
 plotshape(not na(pl), title="Swing Low", style=shape.triangleup,
-          location=location.belowbar, color=color.new(color.green, 30), size=size.tiny)
+          location=location.belowbar, color=color.new(color.green, 30),
+          size=size.tiny, offset=-swing_len)
 
 // CHoCH markers
 plotshape(bullish_choch, title="Bull CHoCH", style=shape.diamond,
@@ -297,24 +396,30 @@ plotshape(bullish_choch, title="Bull CHoCH", style=shape.diamond,
 plotshape(bearish_choch, title="Bear CHoCH", style=shape.diamond,
           location=location.abovebar, color=color.fuchsia, size=size.tiny)
 
-// ============================================================
-// Alerts
-// ============================================================
-alertcondition(long_entry, title="Long — Confluence Met",
-               message="LONG {{ticker}} @ {{close}} | Score: " + str.tostring(min_long_score) + "+")
-alertcondition(short_entry, title="Short — Confluence Met",
-               message="SHORT {{ticker}} @ {{close}} | Score: " + str.tostring(min_short_score) + "+")
+// Zone background
+bgcolor(in_discount ? color.new(color.green, 96) : na, title="Discount Zone")
+bgcolor(in_premium ? color.new(color.red, 96) : na, title="Premium Zone")
 
+// ============================================================
+// STEP 15: Alert Conditions
+// ============================================================
+// alertcondition — TradingView alert dialog
+alertcondition(long_entry, title="Long — Confluence Score Met",
+               message="LONG {{ticker}} @ {{close}} | Confluence score met threshold")
+alertcondition(short_entry, title="Short — Confluence Score Met",
+               message="SHORT {{ticker}} @ {{close}} | Confluence score met threshold")
+
+// alert() — webhook / bot integration with full details
 if long_entry
     alert("LONG " + syminfo.ticker + " @ " + str.tostring(close) +
-          " | Score: " + str.tostring(long_score) +
+          " | Score: " + str.tostring(long_score) + "/" + str.tostring(min_long_score) +
           " | SL: " + str.tostring(long_sl) +
           " | TP: " + str.tostring(long_tp),
           alert.freq_once_per_bar_close)
 
 if short_entry
     alert("SHORT " + syminfo.ticker + " @ " + str.tostring(close) +
-          " | Score: " + str.tostring(short_score) +
+          " | Score: " + str.tostring(short_score) + "/" + str.tostring(min_short_score) +
           " | SL: " + str.tostring(short_sl) +
           " | TP: " + str.tostring(short_tp),
           alert.freq_once_per_bar_close)

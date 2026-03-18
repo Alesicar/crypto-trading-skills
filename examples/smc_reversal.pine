@@ -1,3 +1,20 @@
+// ============================================================
+// SMC Reversal Strategy — CHoCH + Order Block in Discount Zone
+// ============================================================
+// Detects Change of Character (CHoCH) against the prevailing trend,
+// then waits for price to retrace into the Order Block (last opposing
+// candle before the impulse). Entries only fire in the discount zone
+// for longs and premium zone for shorts, ensuring we buy low and
+// sell high within the range. Uses ATR-based stop loss below/above
+// the OB with a small buffer, and a fixed 2R take-profit target.
+//
+// Anti-repainting: all entries gated by barstate.isconfirmed.
+// Anti-lookahead: no request.security used; no future data.
+// Realistic costs: 0.06% commission (Binance/Bybit taker), 2-tick slippage.
+//
+// Best on: 15m–1H crypto charts (BTC, ETH, SOL).
+// ============================================================
+
 //@version=6
 strategy("SMC Reversal — CHoCH + Order Block", overlay=true,
          initial_capital=10000,
@@ -7,173 +24,231 @@ strategy("SMC Reversal — CHoCH + Order Block", overlay=true,
          pyramiding=0)
 
 // ============================================================
-// Inputs
+// STEP 1: User Inputs
 // ============================================================
-swing_len    = input.int(5, "Swing Lookback", minval=2, maxval=20, group="Structure")
-ob_lookback  = input.int(20, "OB Search Bars", minval=5, maxval=50, group="Order Block")
-atr_len      = input.int(14, "ATR Length", group="Risk")
-atr_sl_mult  = input.float(1.5, "ATR SL Multiplier", step=0.1, group="Risk")
-atr_tp_mult  = input.float(2.5, "ATR TP Multiplier", step=0.1, group="Risk")
-range_len    = input.int(50, "Discount/Premium Range", minval=20, group="Zones")
-use_discount = input.bool(true, "Require Discount Zone for Longs", group="Zones")
-use_premium  = input.bool(true, "Require Premium Zone for Shorts", group="Zones")
+// Structure inputs control swing detection sensitivity.
+// Lower swing_len = more swing points detected = more signals.
+swing_len    = input.int(5, "Swing Lookback", minval=2, maxval=20,
+               tooltip="Number of bars on each side to confirm a swing point",
+               group="Structure")
+ob_lookback  = input.int(20, "OB Search Bars", minval=5, maxval=50,
+               tooltip="How many bars back to search for the Order Block candle",
+               group="Structure")
+
+// Risk management inputs
+atr_len      = input.int(14, "ATR Length", group="Risk Management")
+atr_sl_mult  = input.float(1.0, "ATR SL Multiplier", step=0.1, minval=0.5,
+               tooltip="Multiplied by ATR and added as buffer below OB for stop loss",
+               group="Risk Management")
+rr_target    = input.float(2.0, "Risk:Reward Target", step=0.1, minval=1.0,
+               tooltip="Take profit = entry + (entry - stop) * this value",
+               group="Risk Management")
+
+// Zone filtering inputs
+range_len    = input.int(50, "Discount/Premium Range Lookback", minval=20,
+               tooltip="Lookback for calculating the high-low range and equilibrium",
+               group="Zone Filter")
+use_discount = input.bool(true, "Require Discount Zone for Longs",
+               tooltip="When enabled, long entries only fire below equilibrium",
+               group="Zone Filter")
+use_premium  = input.bool(true, "Require Premium Zone for Shorts",
+               tooltip="When enabled, short entries only fire above equilibrium",
+               group="Zone Filter")
 
 // ============================================================
-// Core Calculations
+// STEP 2: Core Calculations
 // ============================================================
+// ATR for dynamic stop-loss buffer sizing
 atr_val = ta.atr(atr_len)
 
-// Premium / Discount zones
+// Premium / Discount zone calculation
+// Equilibrium = midpoint of the recent range; discount = below, premium = above
 range_high  = ta.highest(high, range_len)
 range_low   = ta.lowest(low, range_len)
-equilibrium = (range_high + range_low) / 2
+equilibrium = (range_high + range_low) / 2.0
 in_discount = close < equilibrium
 in_premium  = close > equilibrium
 
 // ============================================================
-// Market Structure — Swing Points
+// STEP 3: Market Structure — Swing Point Detection
 // ============================================================
-var float last_sh = na       // Last swing high value
-var float last_sl = na       // Last swing low value
-var int last_sh_bar = na     // Bar index of last swing high
-var int last_sl_bar = na     // Bar index of last swing low
+// ta.pivothigh/low return the swing value `swing_len` bars after
+// the actual pivot occurred. We track the most recent swing high
+// and swing low along with their bar indices.
+var float last_sh     = na    // Most recent swing high price
+var float last_sl     = na    // Most recent swing low price
+var int   last_sh_bar = na    // Bar index where swing high occurred
+var int   last_sl_bar = na    // Bar index where swing low occurred
 
 ph = ta.pivothigh(high, swing_len, swing_len)
 pl = ta.pivotlow(low, swing_len, swing_len)
 
 if not na(ph)
-    last_sh := ph
+    last_sh     := ph
     last_sh_bar := bar_index - swing_len
+
 if not na(pl)
-    last_sl := pl
+    last_sl     := pl
     last_sl_bar := bar_index - swing_len
 
 // ============================================================
-// Trend Tracking
+// STEP 4: Trend Direction Tracking
 // ============================================================
-var int trend = 0  // 1 = bullish, -1 = bearish, 0 = neutral
-
-// Track higher highs / lower lows for trend
-var float prev_sh = na
-var float prev_sl = na
+// We determine trend by comparing successive swing points:
+//   - Higher high or higher low = bullish (trend = 1)
+//   - Lower high or lower low   = bearish (trend = -1)
+// This is essential for CHoCH detection — CHoCH is a break
+// AGAINST the current trend direction.
+var int   trend   = 0    // 1 = bullish, -1 = bearish, 0 = neutral
+var float prev_sh = na   // Previous swing high for comparison
+var float prev_sl = na   // Previous swing low for comparison
 
 if not na(ph)
     if not na(prev_sh)
         if ph > prev_sh
-            trend := 1   // Higher high = bullish
+            trend := 1    // New higher high → bullish
         else if ph < prev_sh
-            trend := -1  // Lower high = bearish
+            trend := -1   // New lower high → bearish
     prev_sh := ph
 
 if not na(pl)
     if not na(prev_sl)
         if pl > prev_sl
-            trend := 1   // Higher low = bullish
+            trend := 1    // New higher low → bullish
         else if pl < prev_sl
-            trend := -1  // Lower low = bearish
+            trend := -1   // New lower low → bearish
     prev_sl := pl
 
 // ============================================================
-// CHoCH Detection — Break Against Trend
+// STEP 5: Change of Character (CHoCH) Detection
 // ============================================================
+// CHoCH = a break AGAINST the prevailing trend.
+//   - Bullish CHoCH: in a downtrend, close breaks above last swing high
+//   - Bearish CHoCH: in an uptrend, close breaks below last swing low
+// CHoCH is the first warning of a potential trend reversal.
+// We only detect on confirmed bars to prevent repainting.
 var bool bullish_choch = false
 var bool bearish_choch = false
 
+// Reset each bar — CHoCH is a single-bar event
 bullish_choch := false
 bearish_choch := false
 
-// Bullish CHoCH: in downtrend, price closes above last swing high
+// Bullish CHoCH: downtrend broken by close above last swing high
 if trend == -1 and not na(last_sh) and close > last_sh and barstate.isconfirmed
     bullish_choch := true
 
-// Bearish CHoCH: in uptrend, price closes below last swing low
+// Bearish CHoCH: uptrend broken by close below last swing low
 if trend == 1 and not na(last_sl) and close < last_sl and barstate.isconfirmed
     bearish_choch := true
 
 // ============================================================
-// Order Block Detection — Walk Back to Find Last Opposing Candle
+// STEP 6: Order Block Detection
 // ============================================================
-var float bull_ob_top = na
+// After a CHoCH, we walk backward to find the Order Block:
+//   - Bullish OB: last bearish candle (close < open) before the
+//     bullish impulse that created the CHoCH
+//   - Bearish OB: last bullish candle (close > open) before the
+//     bearish impulse
+// The OB represents where institutions placed their orders.
+// Price returning to this zone is a high-probability entry.
+var float bull_ob_top    = na
 var float bull_ob_bottom = na
-var bool bull_ob_active = false
-var int bull_ob_bar = na
+var bool  bull_ob_active = false
+var int   bull_ob_bar    = na
 
-var float bear_ob_top = na
+var float bear_ob_top    = na
 var float bear_ob_bottom = na
-var bool bear_ob_active = false
-var int bear_ob_bar = na
+var bool  bear_ob_active = false
+var int   bear_ob_bar    = na
 
-// Bullish OB: after bullish CHoCH, find last bearish candle before the move
+// Find bullish Order Block after bullish CHoCH
 if bullish_choch
     for i = 1 to ob_lookback
-        if close[i] < open[i]  // Bearish candle
-            bull_ob_top := high[i]
+        if close[i] < open[i]   // Bearish candle = the OB
+            bull_ob_top    := high[i]
             bull_ob_bottom := low[i]
             bull_ob_active := true
-            bull_ob_bar := bar_index - i
+            bull_ob_bar    := bar_index - i
             break
 
-// Bearish OB: after bearish CHoCH, find last bullish candle before the move
+// Find bearish Order Block after bearish CHoCH
 if bearish_choch
     for i = 1 to ob_lookback
-        if close[i] > open[i]  // Bullish candle
-            bear_ob_top := high[i]
+        if close[i] > open[i]   // Bullish candle = the OB
+            bear_ob_top    := high[i]
             bear_ob_bottom := low[i]
             bear_ob_active := true
-            bear_ob_bar := bar_index - i
+            bear_ob_bar    := bar_index - i
             break
 
-// OB Mitigation — invalidate when price blows through
+// OB mitigation — invalidate when price closes through the OB entirely
 if bull_ob_active and close < bull_ob_bottom
     bull_ob_active := false
+
 if bear_ob_active and close > bear_ob_top
     bear_ob_active := false
 
 // ============================================================
-// Entry Conditions
+// STEP 7: Entry Conditions
 // ============================================================
-// Long: price returns to bullish OB zone + in discount (optional)
+// Long entry requires ALL of:
+//   1. Active bullish OB exists (CHoCH happened, OB found)
+//   2. Price has retraced INTO the OB zone (low touches OB, close still above bottom)
+//   3. Price is in discount zone (optional, controlled by input)
+//   4. Bar is confirmed (anti-repaint)
 long_ob_touch = bull_ob_active and low <= bull_ob_top and close >= bull_ob_bottom
 long_zone_ok  = use_discount ? in_discount : true
 long_entry    = long_ob_touch and long_zone_ok and barstate.isconfirmed
 
-// Short: price returns to bearish OB zone + in premium (optional)
+// Short entry requires ALL of:
+//   1. Active bearish OB exists
+//   2. Price has retraced INTO the OB zone
+//   3. Price is in premium zone (optional)
+//   4. Bar is confirmed
 short_ob_touch = bear_ob_active and high >= bear_ob_bottom and close <= bear_ob_top
 short_zone_ok  = use_premium ? in_premium : true
 short_entry    = short_ob_touch and short_zone_ok and barstate.isconfirmed
 
 // ============================================================
-// Risk Management — ATR-Based Stops & Targets
+// STEP 8: Risk Management — ATR Stop + 2R Target
 // ============================================================
-long_sl = bull_ob_bottom - atr_val * 0.2  // Below OB with buffer
-long_tp = close + math.abs(close - long_sl) * (atr_tp_mult / atr_sl_mult)
+// Stop loss: placed below the OB bottom (longs) or above OB top (shorts)
+// with an ATR-based buffer to avoid getting stopped by normal volatility.
+// Take profit: 2R (or user-defined R:R) from entry.
+long_sl  = bull_ob_bottom - atr_val * atr_sl_mult
+long_risk = math.abs(close - long_sl)
+long_tp  = close + long_risk * rr_target
 
-short_sl = bear_ob_top + atr_val * 0.2  // Above OB with buffer
-short_tp = close - math.abs(short_sl - close) * (atr_tp_mult / atr_sl_mult)
+short_sl  = bear_ob_top + atr_val * atr_sl_mult
+short_risk = math.abs(short_sl - close)
+short_tp  = close - short_risk * rr_target
 
 // ============================================================
-// Execute Orders
+// STEP 9: Execute Orders
 // ============================================================
 if long_entry
     strategy.entry("Long", strategy.long)
     strategy.exit("Exit Long", from_entry="Long", stop=long_sl, limit=long_tp)
-    bull_ob_active := false  // Consume the OB
+    bull_ob_active := false   // Consume the OB — one entry per OB
 
 if short_entry
     strategy.entry("Short", strategy.short)
     strategy.exit("Exit Short", from_entry="Short", stop=short_sl, limit=short_tp)
-    bear_ob_active := false  // Consume the OB
+    bear_ob_active := false   // Consume the OB
 
 // ============================================================
-// Visualization
+// STEP 10: Visualization
 // ============================================================
-// Swing points
+// Swing point markers — triangles at detected pivots
 plotshape(not na(ph), title="Swing High", style=shape.triangledown,
-          location=location.abovebar, color=color.new(color.red, 20), size=size.tiny)
+          location=location.abovebar, color=color.new(color.red, 20),
+          size=size.tiny, offset=-swing_len)
 plotshape(not na(pl), title="Swing Low", style=shape.triangleup,
-          location=location.belowbar, color=color.new(color.green, 20), size=size.tiny)
+          location=location.belowbar, color=color.new(color.green, 20),
+          size=size.tiny, offset=-swing_len)
 
-// CHoCH markers
+// CHoCH event markers — labeled diamonds
 plotshape(bullish_choch, title="Bullish CHoCH", style=shape.labelup,
           location=location.belowbar, color=color.new(color.green, 0),
           text="CHoCH", textcolor=color.white, size=size.small)
@@ -181,28 +256,55 @@ plotshape(bearish_choch, title="Bearish CHoCH", style=shape.labeldown,
           location=location.abovebar, color=color.new(color.red, 0),
           text="CHoCH", textcolor=color.white, size=size.small)
 
-// Equilibrium line
-plot(equilibrium, "Equilibrium", color=color.new(color.gray, 50), linewidth=1, style=plot.style_circles)
+// Equilibrium line — separates discount from premium zone
+plot(equilibrium, "Equilibrium", color=color.new(color.gray, 50),
+     linewidth=1, style=plot.style_circles)
 
-// OB zones
+// Discount / Premium zone background shading
+bgcolor(in_discount ? color.new(color.green, 95) : na, title="Discount Zone")
+bgcolor(in_premium ? color.new(color.red, 95) : na, title="Premium Zone")
+
+// Highlight bars where price is inside an active Order Block
 bgcolor(bull_ob_active and low <= bull_ob_top and close >= bull_ob_bottom ?
-        color.new(color.green, 85) : na, title="Bull OB Zone")
+        color.new(color.green, 85) : na, title="Bull OB Touch")
 bgcolor(bear_ob_active and high >= bear_ob_bottom and close <= bear_ob_top ?
-        color.new(color.red, 85) : na, title="Bear OB Zone")
+        color.new(color.red, 85) : na, title="Bear OB Touch")
+
+// Entry markers with price labels
+if long_entry
+    label.new(bar_index, low - atr_val * 0.5,
+              "LONG\nSL:" + str.tostring(long_sl, "#.##") +
+              "\nTP:" + str.tostring(long_tp, "#.##"),
+              style=label.style_label_up, color=color.green,
+              textcolor=color.white, size=size.small)
+
+if short_entry
+    label.new(bar_index, high + atr_val * 0.5,
+              "SHORT\nSL:" + str.tostring(short_sl, "#.##") +
+              "\nTP:" + str.tostring(short_tp, "#.##"),
+              style=label.style_label_down, color=color.red,
+              textcolor=color.white, size=size.small)
 
 // ============================================================
-// Alerts
+// STEP 11: Alert Conditions
 // ============================================================
-alertcondition(long_entry, title="Long Entry — CHoCH + OB",
-               message="LONG {{ticker}} @ {{close}} | CHoCH reversal into bullish Order Block")
-alertcondition(short_entry, title="Short Entry — CHoCH + OB",
-               message="SHORT {{ticker}} @ {{close}} | CHoCH reversal into bearish Order Block")
+// alertcondition() — for TradingView's built-in alert dialog
+alertcondition(long_entry, title="Long Entry — CHoCH + OB in Discount",
+               message="LONG {{ticker}} @ {{close}} | CHoCH reversal into bullish OB in discount zone")
+alertcondition(short_entry, title="Short Entry — CHoCH + OB in Premium",
+               message="SHORT {{ticker}} @ {{close}} | CHoCH reversal into bearish OB in premium zone")
 
+// alert() — for programmatic webhook/bot integration
 if long_entry
     alert("LONG " + syminfo.ticker + " @ " + str.tostring(close) +
-          " | SL: " + str.tostring(long_sl) + " | TP: " + str.tostring(long_tp),
+          " | SL: " + str.tostring(long_sl) +
+          " | TP: " + str.tostring(long_tp) +
+          " | R:R 1:" + str.tostring(rr_target),
           alert.freq_once_per_bar_close)
+
 if short_entry
     alert("SHORT " + syminfo.ticker + " @ " + str.tostring(close) +
-          " | SL: " + str.tostring(short_sl) + " | TP: " + str.tostring(short_tp),
+          " | SL: " + str.tostring(short_sl) +
+          " | TP: " + str.tostring(short_tp) +
+          " | R:R 1:" + str.tostring(rr_target),
           alert.freq_once_per_bar_close)
