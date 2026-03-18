@@ -320,6 +320,29 @@ def _call_claude(prompt: str, system: str, model: str) -> str:
     return message.content[0].text
 
 
+def _strip_inline_comment(line: str) -> str:
+    """Strip inline comments from a Pine Script line, respecting strings.
+
+    Args:
+        line: A single line of Pine Script code.
+
+    Returns:
+        The line with any trailing // comment removed.
+    """
+    in_string = False
+    string_char = None
+    for i, ch in enumerate(line):
+        if ch in ('"', "'") and not in_string:
+            in_string = True
+            string_char = ch
+        elif ch == string_char and in_string:
+            in_string = False
+            string_char = None
+        elif not in_string and ch == "/" and i + 1 < len(line) and line[i + 1] == "/":
+            return line[:i].rstrip()
+    return line
+
+
 def _read_pine_file(path: str) -> str:
     """Read a Pine Script file and return its contents.
 
@@ -508,11 +531,12 @@ def _check_deprecated(lines: list[str], issues: list[tuple[str, int, str]]) -> N
         stripped = line.strip()
         if stripped.startswith("//"):
             continue
+        code_part = _strip_inline_comment(stripped)
         for pattern, (severity, msg) in deprecated_checks.items():
             # Avoid matching request.security(
-            if pattern == "security(" and "request.security(" in stripped:
+            if pattern == "security(" and "request.security(" in code_part:
                 continue
-            if pattern in stripped:
+            if pattern in code_part:
                 issues.append((severity, i + 1, msg))
 
 
@@ -527,16 +551,23 @@ def _check_lookahead(lines: list[str], issues: list[tuple[str, int, str]]) -> No
         issues: List to append findings to.
     """
     for i, line in enumerate(lines):
-        if "lookahead_on" in line and not line.strip().startswith("//"):
+        stripped = line.strip()
+        if stripped.startswith("//"):
+            continue
+        code_part = _strip_inline_comment(stripped)
+        if "lookahead_on" in code_part:
             issues.append(("error", i + 1, "barmerge.lookahead_on detected — causes future data leakage. Use barmerge.lookahead_off"))
-        if "request.security(" in line and not line.strip().startswith("//"):
+        if "request.security(" in code_part:
             # Gather the full call across continuation lines
-            full_call = line
-            paren_depth = line.count("(") - line.count(")")
+            full_call = code_part
+            paren_depth = code_part.count("(") - code_part.count(")")
             j = i + 1
             while paren_depth > 0 and j < len(lines):
-                full_call += " " + lines[j]
-                paren_depth += lines[j].count("(") - lines[j].count(")")
+                cont_line = lines[j].strip()
+                if not cont_line.startswith("//"):
+                    cont_code = _strip_inline_comment(cont_line)
+                    full_call += " " + cont_code
+                    paren_depth += cont_code.count("(") - cont_code.count(")")
                 j += 1
             if "lookahead" not in full_call:
                 issues.append(("warning", i + 1, "request.security() without explicit lookahead parameter — add barmerge.lookahead_off"))
@@ -555,9 +586,10 @@ def _check_brackets(lines: list[str], issues: list[tuple[str, int, str]]) -> Non
         stripped = line.strip()
         if stripped.startswith("//"):
             continue
+        code_part = _strip_inline_comment(stripped)
         in_string = False
         string_char = None
-        for ch in stripped:
+        for ch in code_part:
             if ch in ('"', "'") and not in_string:
                 in_string = True
                 string_char = ch
@@ -652,8 +684,9 @@ def _check_tickerid(lines: list[str], issues: list[tuple[str, int, str]]) -> Non
         stripped = line.strip()
         if stripped.startswith("//"):
             continue
+        code_part = _strip_inline_comment(stripped)
         # Match bare tickerid not preceded by syminfo. or a word char
-        if re.search(r'(?<!\w)(?<!syminfo\.)tickerid(?!\w)', stripped):
+        if re.search(r'(?<!\w)(?<!syminfo\.)tickerid(?!\w)', code_part):
             issues.append(("warning", i + 1, "Bare 'tickerid' found — use syminfo.tickerid instead"))
 
 
@@ -664,13 +697,18 @@ def _check_variable_shadowing(lines: list[str], issues: list[tuple[str, int, str
         lines: Source code lines.
         issues: List to append findings to.
     """
-    # Match simple variable assignments: identifier = value (not ==)
-    assign_pattern = re.compile(r"^(?:var\s+(?:float|int|bool|string|color)\s+)?(\w+)\s*=[^=]")
+    # Match variable assignments with optional var/varip and optional type
+    assign_pattern = re.compile(
+        r"^(?:(?:var|varip)\s+)?"
+        r"(?:(?:float|int|bool|string|color|line|label|box|table)\s+)?"
+        r"(\w+)\s*:?=[^=]"
+    )
     for i, line in enumerate(lines):
         stripped = line.strip()
         if stripped.startswith("//"):
             continue
-        m = assign_pattern.match(stripped)
+        code_part = _strip_inline_comment(stripped)
+        m = assign_pattern.match(code_part)
         if m:
             var_name = m.group(1)
             if var_name in PINE_BUILTINS and var_name not in ("na", "true", "false", "color"):
@@ -685,7 +723,11 @@ def _check_calc_on_every_tick(lines: list[str], issues: list[tuple[str, int, str
         issues: List to append findings to.
     """
     for i, line in enumerate(lines):
-        if "calc_on_every_tick" in line and "true" in line and not line.strip().startswith("//"):
+        stripped = line.strip()
+        if stripped.startswith("//"):
+            continue
+        code_part = _strip_inline_comment(stripped)
+        if "calc_on_every_tick" in code_part and "true" in code_part:
             issues.append(("warning", i + 1, "calc_on_every_tick=true can cause unrealistic backtests — signals may fire on incomplete bars"))
 
 
