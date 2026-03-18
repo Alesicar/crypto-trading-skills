@@ -1,0 +1,99 @@
+// ============================================================
+// Order Block Finder — Draws OB Zones as Boxes on Chart
+// ============================================================
+// Identifies Order Blocks after impulsive moves. An OB is the
+// last opposing candle before a strong impulse:
+//   - Bullish OB: last bearish candle before a bullish impulse
+//   - Bearish OB: last bullish candle before a bearish impulse
+// Impulse is defined as a move exceeding ATR * multiplier.
+// OBs are drawn as boxes and invalidated when price closes through.
+//
+// Best on: 15m–1H crypto/forex charts.
+// ============================================================
+
+//@version=6
+indicator("Order Block Finder", overlay=true, max_boxes_count=500)
+
+// ── Inputs ──────────────────────────────────────────────────
+atr_len      = input.int(14, "ATR Length", group="Detection")
+impulse_mult = input.float(1.5, "Impulse ATR Multiplier", step=0.1, minval=1.0,
+                tooltip="Candle body must exceed ATR * this value to qualify as impulse",
+                group="Detection")
+ob_lookback  = input.int(15, "OB Search Bars", minval=3, maxval=50,
+                group="Detection")
+max_obs      = input.int(10, "Max Active OBs", minval=1, maxval=50,
+                group="Display")
+bull_col     = input.color(color.green, "Bullish OB Color", group="Display")
+bear_col     = input.color(color.red, "Bearish OB Color", group="Display")
+
+// ── Core Calculations ──────────────────────────────────────
+atr_val    = ta.atr(atr_len)
+body       = math.abs(close - open)
+bull_impulse = close > open and body > atr_val * impulse_mult
+bear_impulse = close < open and body > atr_val * impulse_mult
+
+// ── OB Storage ─────────────────────────────────────────────
+// Store active OB boxes for mitigation tracking
+var array<box> bull_boxes = array.new<box>()
+var array<box> bear_boxes = array.new<box>()
+
+// ── Find Bullish Order Block ───────────────────────────────
+// After a bullish impulse, walk back to find last bearish candle
+if bull_impulse and barstate.isconfirmed
+    for i = 1 to ob_lookback
+        if close[i] < open[i]
+            b = box.new(bar_index - i, high[i], bar_index, low[i],
+                        bgcolor=color.new(bull_col, 80),
+                        border_color=bull_col, border_width=1)
+            array.push(bull_boxes, b)
+            break
+
+// ── Find Bearish Order Block ───────────────────────────────
+// After a bearish impulse, walk back to find last bullish candle
+if bear_impulse and barstate.isconfirmed
+    for i = 1 to ob_lookback
+        if close[i] > open[i]
+            b = box.new(bar_index - i, high[i], bar_index, low[i],
+                        bgcolor=color.new(bear_col, 80),
+                        border_color=bear_col, border_width=1)
+            array.push(bear_boxes, b)
+            break
+
+// ── OB Mitigation — Remove When Price Closes Through ───────
+// Bullish OB mitigated if price closes below the OB low
+if array.size(bull_boxes) > 0
+    for i = array.size(bull_boxes) - 1 to 0
+        b = array.get(bull_boxes, i)
+        ob_low = box.get_bottom(b)
+        if close < ob_low
+            box.delete(b)
+            array.remove(bull_boxes, i)
+        else
+            // Extend active boxes to current bar
+            box.set_right(b, bar_index)
+
+// Bearish OB mitigated if price closes above the OB high
+if array.size(bear_boxes) > 0
+    for i = array.size(bear_boxes) - 1 to 0
+        b = array.get(bear_boxes, i)
+        ob_high = box.get_top(b)
+        if close > ob_high
+            box.delete(b)
+            array.remove(bear_boxes, i)
+        else
+            box.set_right(b, bar_index)
+
+// ── Limit Active OBs ──────────────────────────────────────
+// Remove oldest if we exceed the max
+while array.size(bull_boxes) > max_obs
+    box.delete(array.shift(bull_boxes))
+while array.size(bear_boxes) > max_obs
+    box.delete(array.shift(bear_boxes))
+
+// ── Alerts ─────────────────────────────────────────────────
+alertcondition(bull_impulse and barstate.isconfirmed, title="Bullish OB Formed",
+               message="New bullish Order Block on {{ticker}}")
+alertcondition(bear_impulse and barstate.isconfirmed, title="Bearish OB Formed",
+               message="New bearish Order Block on {{ticker}}")
+
+// Want real-time SMC alerts? → smc-field-guide.netlify.app

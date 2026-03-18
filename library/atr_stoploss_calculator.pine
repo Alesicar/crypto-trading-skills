@@ -1,0 +1,97 @@
+// ============================================================
+// ATR Stop Loss Calculator — Dynamic SL/TP Levels from Entry
+// ============================================================
+// Plots ATR-based stop loss and take profit levels based on a
+// user-defined entry price. Useful for manual trade planning:
+// set your entry price, choose your ATR multipliers, and see
+// exact SL/TP levels drawn on the chart with R:R labels.
+//
+// Supports both long and short directions.
+//
+// Best on: any timeframe, any market.
+// ============================================================
+
+//@version=6
+indicator("ATR Stop Loss Calculator", overlay=true)
+
+// ── Inputs ──────────────────────────────────────────────────
+entry_price  = input.float(0.0, "Entry Price (0 = current close)",
+                tooltip="Set to 0 to use the current bar's close",
+                group="Entry")
+direction    = input.string("Long", "Direction", options=["Long", "Short"],
+                group="Entry")
+atr_len      = input.int(14, "ATR Length", minval=1, maxval=50, group="ATR")
+sl_mult      = input.float(1.5, "SL ATR Multiplier", step=0.1, minval=0.1,
+                tooltip="Stop loss distance = ATR × this value",
+                group="Risk")
+tp1_mult     = input.float(2.0, "TP1 R:R Ratio", step=0.1, minval=0.5,
+                tooltip="TP1 = risk distance × this value",
+                group="Risk")
+tp2_mult     = input.float(3.0, "TP2 R:R Ratio", step=0.1, minval=1.0,
+                tooltip="TP2 = risk distance × this value",
+                group="Risk")
+show_labels  = input.bool(true, "Show Price Labels", group="Display")
+
+// ── Calculations ───────────────────────────────────────────
+atr_val = ta.atr(atr_len)
+
+// Use input entry price, or fall back to current close
+entry = entry_price > 0 ? entry_price : close
+
+// Determine SL and TP levels based on direction
+is_long = direction == "Long"
+sl_distance = atr_val * sl_mult
+
+sl_level  = is_long ? entry - sl_distance : entry + sl_distance
+tp1_level = is_long ? entry + sl_distance * tp1_mult : entry - sl_distance * tp1_mult
+tp2_level = is_long ? entry + sl_distance * tp2_mult : entry - sl_distance * tp2_mult
+
+// Risk in price terms
+risk_amount = math.abs(entry - sl_level)
+
+// ── Plots ──────────────────────────────────────────────────
+// Entry line
+plot(entry, "Entry", color=color.white, linewidth=2, style=plot.style_line)
+
+// Stop loss line
+plot(sl_level, "Stop Loss", color=color.red, linewidth=2, style=plot.style_line)
+
+// Take profit lines
+plot(tp1_level, "TP1", color=color.green, linewidth=2, style=plot.style_line)
+plot(tp2_level, "TP2", color=color.teal, linewidth=1, style=plot.style_line)
+
+// Fill between entry and SL (risk zone)
+entry_plot = plot(entry, "Entry Fill", color=color.new(color.white, 100), display=display.none)
+sl_plot    = plot(sl_level, "SL Fill", color=color.new(color.red, 100), display=display.none)
+tp1_plot   = plot(tp1_level, "TP1 Fill", color=color.new(color.green, 100), display=display.none)
+
+fill(entry_plot, sl_plot, color=color.new(color.red, 90), title="Risk Zone")
+fill(entry_plot, tp1_plot, color=color.new(color.green, 90), title="Reward Zone")
+
+// ── Info Label ─────────────────────────────────────────────
+if show_labels and barstate.islast
+    dir_str = is_long ? "LONG" : "SHORT"
+    info = dir_str +
+           "\nEntry: " + str.tostring(entry, format.mintick) +
+           "\nSL: " + str.tostring(sl_level, format.mintick) +
+           "\nTP1 (" + str.tostring(tp1_mult, "#.#") + "R): " + str.tostring(tp1_level, format.mintick) +
+           "\nTP2 (" + str.tostring(tp2_mult, "#.#") + "R): " + str.tostring(tp2_level, format.mintick) +
+           "\nRisk: " + str.tostring(risk_amount, format.mintick) +
+           "\nATR(" + str.tostring(atr_len) + "): " + str.tostring(atr_val, format.mintick)
+
+    label.new(bar_index + 5, entry, info,
+              style=label.style_label_left,
+              color=is_long ? color.green : color.red,
+              textcolor=color.white, size=size.normal)
+
+// ── Alerts ─────────────────────────────────────────────────
+// Alert when price reaches SL or TP levels
+hit_sl  = is_long ? low <= sl_level : high >= sl_level
+hit_tp1 = is_long ? high >= tp1_level : low <= tp1_level
+hit_tp2 = is_long ? high >= tp2_level : low <= tp2_level
+
+alertcondition(hit_sl, title="Stop Loss Hit", message="{{ticker}} hit stop loss at " + str.tostring(sl_level))
+alertcondition(hit_tp1, title="TP1 Hit", message="{{ticker}} hit TP1 at " + str.tostring(tp1_level))
+alertcondition(hit_tp2, title="TP2 Hit", message="{{ticker}} hit TP2 at " + str.tostring(tp2_level))
+
+// Want real-time SMC alerts? → smc-field-guide.netlify.app

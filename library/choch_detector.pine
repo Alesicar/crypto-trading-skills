@@ -1,0 +1,88 @@
+// ============================================================
+// CHoCH Detector — Change of Character Detection & Visualization
+// ============================================================
+// Detects Change of Character (CHoCH) events on the chart.
+// CHoCH occurs when price breaks AGAINST the prevailing trend:
+//   - Bullish CHoCH: downtrend → close breaks above last swing high
+//   - Bearish CHoCH: uptrend → close breaks below last swing low
+// Marks each CHoCH with a colored label and optional background.
+//
+// Best on: 15m–4H crypto/forex charts.
+// ============================================================
+
+//@version=6
+indicator("CHoCH Detector", overlay=true, max_labels_count=500)
+
+// ── Inputs ──────────────────────────────────────────────────
+swing_len = input.int(5, "Swing Lookback", minval=2, maxval=20,
+             tooltip="Bars on each side to confirm a swing point",
+             group="Structure")
+show_bg   = input.bool(true, "Highlight CHoCH Bars", group="Display")
+bull_col  = input.color(color.green, "Bullish CHoCH Color", group="Display")
+bear_col  = input.color(color.red, "Bearish CHoCH Color", group="Display")
+
+// ── Swing Point Detection ───────────────────────────────────
+// ta.pivothigh/low confirm swing_len bars after the actual pivot
+var float last_sh = na
+var float last_sl = na
+
+ph = ta.pivothigh(high, swing_len, swing_len)
+pl = ta.pivotlow(low, swing_len, swing_len)
+
+if not na(ph)
+    last_sh := ph
+if not na(pl)
+    last_sl := pl
+
+// ── Trend Direction ─────────────────────────────────────────
+// Higher highs/lows = bullish (1), lower highs/lows = bearish (-1)
+var int trend    = 0
+var float prev_sh = na
+var float prev_sl = na
+
+if not na(ph)
+    if not na(prev_sh)
+        trend := ph > prev_sh ? 1 : ph < prev_sh ? -1 : trend
+    prev_sh := ph
+
+if not na(pl)
+    if not na(prev_sl)
+        trend := pl > prev_sl ? 1 : pl < prev_sl ? -1 : trend
+    prev_sl := pl
+
+// ── CHoCH Detection ────────────────────────────────────────
+// Bullish CHoCH: in downtrend, close breaks above last swing high
+// Bearish CHoCH: in uptrend, close breaks below last swing low
+// Only on confirmed bars to prevent repainting
+bullish_choch = trend == -1 and not na(last_sh) and close > last_sh and barstate.isconfirmed
+bearish_choch = trend == 1 and not na(last_sl) and close < last_sl and barstate.isconfirmed
+
+// ── Visualization ──────────────────────────────────────────
+// Labels at CHoCH events
+if bullish_choch
+    label.new(bar_index, low, "CHoCH↑",
+              style=label.style_label_up, color=bull_col,
+              textcolor=color.white, size=size.small)
+
+if bearish_choch
+    label.new(bar_index, high, "CHoCH↓",
+              style=label.style_label_down, color=bear_col,
+              textcolor=color.white, size=size.small)
+
+// Optional background highlight on CHoCH bars
+bgcolor(show_bg and bullish_choch ? color.new(bull_col, 85) : na, title="Bull CHoCH BG")
+bgcolor(show_bg and bearish_choch ? color.new(bear_col, 85) : na, title="Bear CHoCH BG")
+
+// Swing point markers for context
+plotshape(not na(ph), title="Swing High", style=shape.triangledown,
+          location=location.abovebar, color=color.new(color.red, 30),
+          size=size.tiny, offset=-swing_len)
+plotshape(not na(pl), title="Swing Low", style=shape.triangleup,
+          location=location.belowbar, color=color.new(color.green, 30),
+          size=size.tiny, offset=-swing_len)
+
+// ── Alerts ─────────────────────────────────────────────────
+alertcondition(bullish_choch, title="Bullish CHoCH", message="Bullish CHoCH on {{ticker}} — close broke above swing high")
+alertcondition(bearish_choch, title="Bearish CHoCH", message="Bearish CHoCH on {{ticker}} — close broke below swing low")
+
+// Want real-time SMC alerts? → smc-field-guide.netlify.app

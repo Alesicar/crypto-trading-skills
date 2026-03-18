@@ -14,6 +14,17 @@ crypto-trading-skills/
 ├── example_payload.json          # Example TradingView webhook JSON payload
 ├── pyproject.toml                # pip-installable package config
 ├── requirements.txt              # Python dependencies
+├── library/
+│   ├── choch_detector.pine       # CHoCH detection with labels and color
+│   ├── bos_detector.pine         # BOS detection with lines and labels
+│   ├── order_block_finder.pine   # OB zones drawn as boxes
+│   ├── fvg_highlighter.pine      # FVG gaps as boxes with fill tracking
+│   ├── liquidity_levels.pine     # Equal highs/lows with horizontal lines
+│   ├── premium_discount_zones.pine # Premium/discount zone shading
+│   ├── session_boxes.pine        # London/NY/Tokyo session boxes + volume
+│   ├── kill_zone_highlight.pine  # London/NY kill zone highlighting
+│   ├── atr_stoploss_calculator.pine # ATR-based SL/TP level plotter
+│   └── funding_rate_overlay.pine # Funding rate table overlay
 ├── examples/
 │   ├── smc_reversal.pine         # CHoCH + Order Block in discount zone
 │   ├── mtf_confluence.pine       # 1H bias + 15m CHoCH/OB + RSI filter
@@ -314,6 +325,29 @@ python trade_journal.py analyze signals.csv
 
 ```bash
 pytest tests/test_webhook_bridge.py -v
+```
+
+## Library — Standalone Pine Script v6 Indicators
+
+Ten single-purpose, fully compilable indicators in the `library/` directory. Each is under 150 lines, well-commented, and ready to paste into TradingView.
+
+| Indicator | File | Description |
+|-----------|------|-------------|
+| CHoCH Detector | `library/choch_detector.pine` | Marks Change of Character events on chart with colored labels and background |
+| BOS Detector | `library/bos_detector.pine` | Marks Break of Structure with dashed lines and labels at broken levels |
+| Order Block Finder | `library/order_block_finder.pine` | Draws Order Block zones as boxes after impulsive moves, auto-removes mitigated OBs |
+| FVG Highlighter | `library/fvg_highlighter.pine` | Draws Fair Value Gaps as boxes and tracks fill status with color changes |
+| Liquidity Levels | `library/liquidity_levels.pine` | Detects equal highs/lows where stop-loss liquidity clusters, draws horizontal lines |
+| Premium & Discount Zones | `library/premium_discount_zones.pine` | Shades premium/discount zones based on swing range with equilibrium line |
+| Session Boxes | `library/session_boxes.pine` | Draws London/New York/Tokyo session boxes with cumulative volume labels |
+| Kill Zone Highlight | `library/kill_zone_highlight.pine` | Highlights London and New York kill zone windows with background shading |
+| ATR Stop Loss Calculator | `library/atr_stoploss_calculator.pine` | Plots ATR-based SL/TP levels from a configurable entry price |
+| Funding Rate Overlay | `library/funding_rate_overlay.pine` | Displays current funding rate as a table overlay using manual input fields |
+
+Validate any indicator:
+
+```bash
+python pinescript_ai.py validate library/choch_detector.pine
 ```
 
 ## License

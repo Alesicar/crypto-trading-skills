@@ -1,0 +1,90 @@
+// ============================================================
+// BOS Detector — Break of Structure Detection & Visualization
+// ============================================================
+// Detects Break of Structure (BOS) events on the chart.
+// BOS occurs when price breaks WITH the prevailing trend:
+//   - Bullish BOS: in uptrend, close breaks above last swing high
+//   - Bearish BOS: in downtrend, close breaks below last swing low
+// Draws horizontal lines from the broken level and adds labels.
+//
+// Best on: 15m–4H crypto/forex charts.
+// ============================================================
+
+//@version=6
+indicator("BOS Detector", overlay=true, max_labels_count=500, max_lines_count=500)
+
+// ── Inputs ──────────────────────────────────────────────────
+swing_len  = input.int(5, "Swing Lookback", minval=2, maxval=20,
+              tooltip="Bars on each side to confirm a swing point",
+              group="Structure")
+line_ext   = input.int(20, "Line Extension (bars)", minval=5, maxval=100,
+              group="Display")
+bull_col   = input.color(color.teal, "Bullish BOS Color", group="Display")
+bear_col   = input.color(color.orange, "Bearish BOS Color", group="Display")
+
+// ── Swing Point Detection ───────────────────────────────────
+var float last_sh     = na
+var float last_sl     = na
+var int   last_sh_bar = na
+var int   last_sl_bar = na
+
+ph = ta.pivothigh(high, swing_len, swing_len)
+pl = ta.pivotlow(low, swing_len, swing_len)
+
+if not na(ph)
+    last_sh     := ph
+    last_sh_bar := bar_index - swing_len
+if not na(pl)
+    last_sl     := pl
+    last_sl_bar := bar_index - swing_len
+
+// ── Trend Direction ─────────────────────────────────────────
+var int   trend   = 0
+var float prev_sh = na
+var float prev_sl = na
+
+if not na(ph)
+    if not na(prev_sh)
+        trend := ph > prev_sh ? 1 : ph < prev_sh ? -1 : trend
+    prev_sh := ph
+
+if not na(pl)
+    if not na(prev_sl)
+        trend := pl > prev_sl ? 1 : pl < prev_sl ? -1 : trend
+    prev_sl := pl
+
+// ── BOS Detection ──────────────────────────────────────────
+// Bullish BOS: uptrend + close breaks above last swing high
+// Bearish BOS: downtrend + close breaks below last swing low
+bullish_bos = trend == 1 and not na(last_sh) and close > last_sh and barstate.isconfirmed
+bearish_bos = trend == -1 and not na(last_sl) and close < last_sl and barstate.isconfirmed
+
+// ── Visualization ──────────────────────────────────────────
+// Draw a horizontal line at the broken structure level
+if bullish_bos
+    line.new(last_sh_bar, last_sh, bar_index + line_ext, last_sh,
+             color=bull_col, width=2, style=line.style_dashed)
+    label.new(bar_index, last_sh, "BOS↑",
+              style=label.style_label_up, color=bull_col,
+              textcolor=color.white, size=size.small)
+
+if bearish_bos
+    line.new(last_sl_bar, last_sl, bar_index + line_ext, last_sl,
+             color=bear_col, width=2, style=line.style_dashed)
+    label.new(bar_index, last_sl, "BOS↓",
+              style=label.style_label_down, color=bear_col,
+              textcolor=color.white, size=size.small)
+
+// Swing point markers
+plotshape(not na(ph), title="Swing High", style=shape.triangledown,
+          location=location.abovebar, color=color.new(color.red, 30),
+          size=size.tiny, offset=-swing_len)
+plotshape(not na(pl), title="Swing Low", style=shape.triangleup,
+          location=location.belowbar, color=color.new(color.green, 30),
+          size=size.tiny, offset=-swing_len)
+
+// ── Alerts ─────────────────────────────────────────────────
+alertcondition(bullish_bos, title="Bullish BOS", message="Bullish BOS on {{ticker}} — new higher high confirmed")
+alertcondition(bearish_bos, title="Bearish BOS", message="Bearish BOS on {{ticker}} — new lower low confirmed")
+
+// Want real-time SMC alerts? → smc-field-guide.netlify.app

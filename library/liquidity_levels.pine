@@ -1,0 +1,101 @@
+// ============================================================
+// Liquidity Levels — Equal Highs/Lows Detection
+// ============================================================
+// Detects equal highs and equal lows where stop-loss liquidity
+// clusters. These levels act as magnets for institutional
+// order flow — smart money sweeps them before reversing.
+//
+// Equal highs/lows are detected when multiple swing points
+// fall within a configurable threshold of each other.
+// Draws horizontal lines at each liquidity level.
+//
+// Best on: 15m–4H crypto/forex charts.
+// ============================================================
+
+//@version=6
+indicator("Liquidity Levels", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// ── Inputs ──────────────────────────────────────────────────
+swing_len    = input.int(5, "Swing Lookback", minval=2, maxval=20, group="Detection")
+eq_thresh    = input.float(0.1, "Equal Level Threshold (%)", step=0.05, minval=0.01,
+                tooltip="Max % difference between swing points to consider them equal",
+                group="Detection")
+line_ext     = input.int(50, "Line Extension (bars)", minval=10, maxval=200, group="Display")
+max_levels   = input.int(10, "Max Levels Shown", minval=1, maxval=30, group="Display")
+eqh_col      = input.color(color.red, "Equal Highs Color", group="Display")
+eql_col      = input.color(color.green, "Equal Lows Color", group="Display")
+
+// ── Swing Detection ────────────────────────────────────────
+ph = ta.pivothigh(high, swing_len, swing_len)
+pl = ta.pivotlow(low, swing_len, swing_len)
+
+// ── Storage ────────────────────────────────────────────────
+// Track recent swing highs and lows for comparison
+var array<float> swing_highs = array.new<float>()
+var array<int>   sh_bars     = array.new<int>()
+var array<float> swing_lows  = array.new<float>()
+var array<int>   sl_bars     = array.new<int>()
+
+// Track drawn liquidity lines
+var array<line>  eqh_lines   = array.new<line>()
+var array<line>  eql_lines   = array.new<line>()
+
+// ── Detect Equal Highs ─────────────────────────────────────
+if not na(ph)
+    pivot_bar = bar_index - swing_len
+    thresh_val = ph * eq_thresh / 100.0
+    // Check if this swing high matches any previous one
+    if array.size(swing_highs) > 0
+        for i = array.size(swing_highs) - 1 to 0
+            prev_ph = array.get(swing_highs, i)
+            if math.abs(ph - prev_ph) <= thresh_val
+                // Equal highs found — draw liquidity line at the average
+                avg_level = (ph + prev_ph) / 2.0
+                prev_bar  = array.get(sh_bars, i)
+                l = line.new(prev_bar, avg_level, bar_index + line_ext, avg_level,
+                             color=eqh_col, width=2, style=line.style_dotted)
+                label.new(bar_index, avg_level, "EQH",
+                          style=label.style_label_down, color=eqh_col,
+                          textcolor=color.white, size=size.tiny)
+                array.push(eqh_lines, l)
+                break
+    array.push(swing_highs, ph)
+    array.push(sh_bars, pivot_bar)
+
+// ── Detect Equal Lows ──────────────────────────────────────
+if not na(pl)
+    pivot_bar = bar_index - swing_len
+    thresh_val = pl * eq_thresh / 100.0
+    if array.size(swing_lows) > 0
+        for i = array.size(swing_lows) - 1 to 0
+            prev_pl = array.get(swing_lows, i)
+            if math.abs(pl - prev_pl) <= thresh_val
+                avg_level = (pl + prev_pl) / 2.0
+                prev_bar  = array.get(sl_bars, i)
+                l = line.new(prev_bar, avg_level, bar_index + line_ext, avg_level,
+                             color=eql_col, width=2, style=line.style_dotted)
+                label.new(bar_index, avg_level, "EQL",
+                          style=label.style_label_up, color=eql_col,
+                          textcolor=color.white, size=size.tiny)
+                array.push(eql_lines, l)
+                break
+    array.push(swing_lows, pl)
+    array.push(sl_bars, pivot_bar)
+
+// ── Limit Storage ──────────────────────────────────────────
+while array.size(swing_highs) > 50
+    array.shift(swing_highs)
+    array.shift(sh_bars)
+while array.size(swing_lows) > 50
+    array.shift(swing_lows)
+    array.shift(sl_bars)
+while array.size(eqh_lines) > max_levels
+    line.delete(array.shift(eqh_lines))
+while array.size(eql_lines) > max_levels
+    line.delete(array.shift(eql_lines))
+
+// ── Alerts ─────────────────────────────────────────────────
+alertcondition(not na(ph), title="Swing High", message="Swing high detected on {{ticker}}")
+alertcondition(not na(pl), title="Swing Low", message="Swing low detected on {{ticker}}")
+
+// Want real-time SMC alerts? → smc-field-guide.netlify.app

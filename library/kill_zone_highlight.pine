@@ -1,0 +1,106 @@
+// ============================================================
+// Kill Zone Highlight — London & New York Kill Zones
+// ============================================================
+// Highlights the high-probability "kill zones" where
+// institutional activity peaks and the best setups form.
+//
+// Kill zones are narrower windows within sessions where
+// most of the daily volume and volatility concentrate:
+//   - London Kill Zone:  02:00–05:00 EST (07:00–10:00 UTC)
+//   - New York Kill Zone: 07:00–10:00 EST (12:00–15:00 UTC)
+//
+// Background is shaded during kill zones. Bar colors change
+// to indicate the active zone.
+//
+// Best on: 1m–15m crypto/forex charts.
+// ============================================================
+
+//@version=6
+indicator("Kill Zone Highlight", overlay=true)
+
+// ── Inputs ──────────────────────────────────────────────────
+show_london_kz = input.bool(true, "Show London Kill Zone", group="Kill Zones")
+show_ny_kz     = input.bool(true, "Show New York Kill Zone", group="Kill Zones")
+
+london_kz_col  = input.color(color.blue, "London KZ Color", group="Colors")
+ny_kz_col      = input.color(color.orange, "NY KZ Color", group="Colors")
+transp         = input.int(85, "Background Transparency", minval=50, maxval=97, group="Colors")
+
+color_bars     = input.bool(true, "Color Bars in Kill Zone", group="Display")
+
+// ── Kill Zone Detection ────────────────────────────────────
+// London Kill Zone: 07:00–10:00 UTC
+london_kz = show_london_kz and not na(time(timeframe.period, "0700-1000", "Etc/UTC"))
+
+// New York Kill Zone: 12:00–15:00 UTC
+ny_kz = show_ny_kz and not na(time(timeframe.period, "1200-1500", "Etc/UTC"))
+
+// Any kill zone active
+any_kz = london_kz or ny_kz
+
+// ── Background Shading ────────────────────────────────────
+bgcolor(london_kz ? color.new(london_kz_col, transp) : na, title="London KZ Background")
+bgcolor(ny_kz ? color.new(ny_kz_col, transp) : na, title="NY KZ Background")
+
+// ── Bar Coloring ───────────────────────────────────────────
+// Color bars based on which kill zone is active
+kz_bar_color = london_kz and ny_kz ? color.new(color.yellow, 20) :
+               london_kz ? color.new(london_kz_col, 20) :
+               ny_kz ? color.new(ny_kz_col, 20) : na
+
+barcolor(color_bars ? kz_bar_color : na, title="KZ Bar Color")
+
+// ── Kill Zone Range Tracking ──────────────────────────────
+// Track high/low of each kill zone for the current session
+var float lkz_high = na
+var float lkz_low  = na
+var bool  lkz_was_active = false
+
+var float nkz_high = na
+var float nkz_low  = na
+var bool  nkz_was_active = false
+
+// London KZ range
+if london_kz
+    if not lkz_was_active
+        lkz_high := high
+        lkz_low  := low
+    else
+        lkz_high := math.max(lkz_high, high)
+        lkz_low  := math.min(lkz_low, low)
+    lkz_was_active := true
+else
+    lkz_was_active := false
+
+// NY KZ range
+if ny_kz
+    if not nkz_was_active
+        nkz_high := high
+        nkz_low  := low
+    else
+        nkz_high := math.max(nkz_high, high)
+        nkz_low  := math.min(nkz_low, low)
+    nkz_was_active := true
+else
+    nkz_was_active := false
+
+// ── Plots ──────────────────────────────────────────────────
+// Plot KZ high/low as reference levels (only during active zones)
+plot(london_kz ? lkz_high : na, "London KZ High", color=london_kz_col,
+     style=plot.style_linebr, linewidth=1)
+plot(london_kz ? lkz_low : na, "London KZ Low", color=london_kz_col,
+     style=plot.style_linebr, linewidth=1)
+plot(ny_kz ? nkz_high : na, "NY KZ High", color=ny_kz_col,
+     style=plot.style_linebr, linewidth=1)
+plot(ny_kz ? nkz_low : na, "NY KZ Low", color=ny_kz_col,
+     style=plot.style_linebr, linewidth=1)
+
+// ── Alerts ─────────────────────────────────────────────────
+alertcondition(london_kz and not london_kz[1], title="London KZ Start",
+               message="London Kill Zone started on {{ticker}}")
+alertcondition(ny_kz and not ny_kz[1], title="NY KZ Start",
+               message="New York Kill Zone started on {{ticker}}")
+alertcondition(any_kz, title="Any KZ Active",
+               message="Kill Zone active on {{ticker}}")
+
+// Want real-time SMC alerts? → smc-field-guide.netlify.app
