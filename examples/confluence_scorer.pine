@@ -1,0 +1,320 @@
+//@version=6
+strategy("Confluence Scorer — Multi-Factor Entry System", overlay=true,
+         initial_capital=10000,
+         default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+         commission_type=strategy.commission.percent, commission_value=0.06,
+         slippage=2, calc_on_every_tick=false, process_orders_on_close=false,
+         pyramiding=0)
+
+// ============================================================
+// Inputs
+// ============================================================
+// Structure
+swing_len     = input.int(5, "Swing Lookback", minval=2, maxval=20, group="Structure")
+ob_lookback   = input.int(20, "OB Search Bars", minval=5, maxval=50, group="Structure")
+
+// Confluence
+min_long_score  = input.int(4, "Min Long Score", minval=1, maxval=8, group="Confluence")
+min_short_score = input.int(4, "Min Short Score", minval=1, maxval=8, group="Confluence")
+
+// Risk
+atr_len     = input.int(14, "ATR Length", group="Risk")
+atr_sl_mult = input.float(1.5, "ATR SL Multiplier", step=0.1, group="Risk")
+rr_ratio    = input.float(2.0, "Risk:Reward Ratio", step=0.1, group="Risk")
+
+// Zones
+range_len = input.int(50, "Range Lookback", minval=20, group="Zones")
+
+// Volume
+vol_mult = input.float(1.2, "Volume Threshold Multiplier", step=0.1, group="Volume")
+vol_len  = input.int(20, "Volume MA Length", group="Volume")
+
+// HTF
+htf_tf = input.timeframe("60", "Higher TF for Trend", group="Multi-TF")
+
+// ============================================================
+// Core Calculations
+// ============================================================
+atr_val = ta.atr(atr_len)
+vol_ma  = ta.sma(volume, vol_len)
+vol_above_avg = volume > vol_ma * vol_mult
+
+// ============================================================
+// Premium / Discount Zones
+// ============================================================
+range_high  = ta.highest(high, range_len)
+range_low   = ta.lowest(low, range_len)
+equilibrium = (range_high + range_low) / 2
+in_discount = close < equilibrium
+in_premium  = close > equilibrium
+
+// ============================================================
+// Higher Timeframe Trend (via request.security)
+// ============================================================
+htf_ema_fast = request.security(syminfo.tickerid, htf_tf, ta.ema(close, 20),
+                                 barmerge.gaps_off, barmerge.lookahead_off)
+htf_ema_slow = request.security(syminfo.tickerid, htf_tf, ta.ema(close, 50),
+                                 barmerge.gaps_off, barmerge.lookahead_off)
+htf_bullish = htf_ema_fast > htf_ema_slow
+htf_bearish = htf_ema_fast < htf_ema_slow
+
+// ============================================================
+// Market Structure — Swing Points
+// ============================================================
+var float last_sh = na
+var float last_sl = na
+
+ph = ta.pivothigh(high, swing_len, swing_len)
+pl = ta.pivotlow(low, swing_len, swing_len)
+
+if not na(ph)
+    last_sh := ph
+if not na(pl)
+    last_sl := pl
+
+// ============================================================
+// Trend via Structure
+// ============================================================
+var int trend = 0
+var float prev_sh = na
+var float prev_sl = na
+
+if not na(ph)
+    if not na(prev_sh)
+        trend := ph > prev_sh ? 1 : -1
+    prev_sh := ph
+
+if not na(pl)
+    if not na(prev_sl)
+        trend := pl > prev_sl ? 1 : -1
+    prev_sl := pl
+
+// ============================================================
+// CHoCH Detection
+// ============================================================
+bullish_choch = trend == -1 and not na(last_sh) and close > last_sh and barstate.isconfirmed
+bearish_choch = trend == 1 and not na(last_sl) and close < last_sl and barstate.isconfirmed
+
+// Track recent CHoCH (within last N bars)
+var int bars_since_bull_choch = 999
+var int bars_since_bear_choch = 999
+
+bars_since_bull_choch := bullish_choch ? 0 : bars_since_bull_choch + 1
+bars_since_bear_choch := bearish_choch ? 0 : bars_since_bear_choch + 1
+
+recent_bull_choch = bars_since_bull_choch <= 10
+recent_bear_choch = bars_since_bear_choch <= 10
+
+// ============================================================
+// Order Block Detection
+// ============================================================
+var float bull_ob_top = na
+var float bull_ob_bottom = na
+var bool bull_ob_active = false
+
+var float bear_ob_top = na
+var float bear_ob_bottom = na
+var bool bear_ob_active = false
+
+if bullish_choch
+    for i = 1 to ob_lookback
+        if close[i] < open[i]
+            bull_ob_top := high[i]
+            bull_ob_bottom := low[i]
+            bull_ob_active := true
+            break
+
+if bearish_choch
+    for i = 1 to ob_lookback
+        if close[i] > open[i]
+            bear_ob_top := high[i]
+            bear_ob_bottom := low[i]
+            bear_ob_active := true
+            break
+
+// Price in OB zone
+in_bull_ob = bull_ob_active and low <= bull_ob_top and close >= bull_ob_bottom
+in_bear_ob = bear_ob_active and high >= bear_ob_bottom and close <= bear_ob_top
+
+// Mitigation
+if bull_ob_active and close < bull_ob_bottom
+    bull_ob_active := false
+if bear_ob_active and close > bear_ob_top
+    bear_ob_active := false
+
+// ============================================================
+// Fair Value Gap Detection
+// ============================================================
+bullish_fvg = low > high[2]
+bearish_fvg = high < low[2]
+
+// Track active FVG zones
+var float bull_fvg_top = na
+var float bull_fvg_bot = na
+var bool bull_fvg_active = false
+
+var float bear_fvg_top = na
+var float bear_fvg_bot = na
+var bool bear_fvg_active = false
+
+if bullish_fvg
+    bull_fvg_top := low
+    bull_fvg_bot := high[2]
+    bull_fvg_active := true
+
+if bearish_fvg
+    bear_fvg_top := low[2]
+    bear_fvg_bot := high
+    bear_fvg_active := true
+
+// Check if price is in FVG zone
+in_bull_fvg = bull_fvg_active and low <= bull_fvg_top and close >= bull_fvg_bot
+in_bear_fvg = bear_fvg_active and high >= bear_fvg_bot and close <= bear_fvg_top
+
+// FVG fill = mitigated
+if bull_fvg_active and close < bull_fvg_bot
+    bull_fvg_active := false
+if bear_fvg_active and close > bear_fvg_top
+    bear_fvg_active := false
+
+// ============================================================
+// CONFLUENCE SCORING — Long
+// ============================================================
+var int long_score = 0
+long_score := 0
+
+// +2: Recent bullish CHoCH
+if recent_bull_choch
+    long_score += 2
+
+// +2: Price in bullish Order Block
+if in_bull_ob
+    long_score += 2
+
+// +1: Bullish FVG present
+if in_bull_fvg
+    long_score += 1
+
+// +1: In discount zone
+if in_discount
+    long_score += 1
+
+// +1: Volume above average
+if vol_above_avg
+    long_score += 1
+
+// +1: HTF trend bullish
+if htf_bullish
+    long_score += 1
+
+// ============================================================
+// CONFLUENCE SCORING — Short
+// ============================================================
+var int short_score = 0
+short_score := 0
+
+// +2: Recent bearish CHoCH
+if recent_bear_choch
+    short_score += 2
+
+// +2: Price in bearish Order Block
+if in_bear_ob
+    short_score += 2
+
+// +1: Bearish FVG present
+if in_bear_fvg
+    short_score += 1
+
+// +1: In premium zone
+if in_premium
+    short_score += 1
+
+// +1: Volume above average
+if vol_above_avg
+    short_score += 1
+
+// +1: HTF trend bearish
+if htf_bearish
+    short_score += 1
+
+// ============================================================
+// Entry & Exit Logic
+// ============================================================
+long_entry  = long_score >= min_long_score and barstate.isconfirmed
+short_entry = short_score >= min_short_score and barstate.isconfirmed
+
+// Risk calculations
+long_sl  = close - atr_val * atr_sl_mult
+long_tp  = close + atr_val * atr_sl_mult * rr_ratio
+short_sl = close + atr_val * atr_sl_mult
+short_tp = close - atr_val * atr_sl_mult * rr_ratio
+
+if long_entry
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Exit Long", from_entry="Long", stop=long_sl, limit=long_tp)
+
+if short_entry
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Exit Short", from_entry="Short", stop=short_sl, limit=short_tp)
+
+// ============================================================
+// Visualization — Score Display
+// ============================================================
+// Score labels on entries
+if long_entry
+    label.new(bar_index, low - atr_val,
+              "L:" + str.tostring(long_score),
+              style=label.style_label_up, color=color.green,
+              textcolor=color.white, size=size.small)
+
+if short_entry
+    label.new(bar_index, high + atr_val,
+              "S:" + str.tostring(short_score),
+              style=label.style_label_down, color=color.red,
+              textcolor=color.white, size=size.small)
+
+// Score histogram in separate pane
+plot(long_score, "Long Score", color=color.new(color.green, 30),
+     style=plot.style_histogram, linewidth=2, display=display.pane)
+plot(-short_score, "Short Score", color=color.new(color.red, 30),
+     style=plot.style_histogram, linewidth=2, display=display.pane)
+hline(min_long_score, "Min Long Threshold", color=color.green, linestyle=hline.style_dashed)
+hline(-min_short_score, "Min Short Threshold", color=color.red, linestyle=hline.style_dashed)
+hline(0, "Zero", color=color.gray)
+
+// Equilibrium
+plot(equilibrium, "Equilibrium", color=color.new(color.gray, 60), linewidth=1)
+
+// Structure markers
+plotshape(not na(ph), title="Swing High", style=shape.triangledown,
+          location=location.abovebar, color=color.new(color.red, 30), size=size.tiny)
+plotshape(not na(pl), title="Swing Low", style=shape.triangleup,
+          location=location.belowbar, color=color.new(color.green, 30), size=size.tiny)
+
+// CHoCH markers
+plotshape(bullish_choch, title="Bull CHoCH", style=shape.diamond,
+          location=location.belowbar, color=color.lime, size=size.tiny)
+plotshape(bearish_choch, title="Bear CHoCH", style=shape.diamond,
+          location=location.abovebar, color=color.fuchsia, size=size.tiny)
+
+// ============================================================
+// Alerts
+// ============================================================
+alertcondition(long_entry, title="Long — Confluence Met",
+               message="LONG {{ticker}} @ {{close}} | Score: " + str.tostring(min_long_score) + "+")
+alertcondition(short_entry, title="Short — Confluence Met",
+               message="SHORT {{ticker}} @ {{close}} | Score: " + str.tostring(min_short_score) + "+")
+
+if long_entry
+    alert("LONG " + syminfo.ticker + " @ " + str.tostring(close) +
+          " | Score: " + str.tostring(long_score) +
+          " | SL: " + str.tostring(long_sl) +
+          " | TP: " + str.tostring(long_tp),
+          alert.freq_once_per_bar_close)
+
+if short_entry
+    alert("SHORT " + syminfo.ticker + " @ " + str.tostring(close) +
+          " | Score: " + str.tostring(short_score) +
+          " | SL: " + str.tostring(short_sl) +
+          " | TP: " + str.tostring(short_tp),
+          alert.freq_once_per_bar_close)

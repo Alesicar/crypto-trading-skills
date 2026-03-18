@@ -8,6 +8,104 @@ A collection of **Claude Code skills** that give Claude deep knowledge of crypto
 
 These skills encode real trading knowledge — Smart Money Concepts, funding rate arbitrage, risk governance, position sizing — so Claude Code can generate production-quality trading tools instead of generic boilerplate.
 
+## Pine Script v6 Generator CLI
+
+The flagship tool: a Typer CLI that generates, validates, and analyzes TradingView Pine Script v6 strategies using Claude with deep SMC knowledge baked into every prompt.
+
+### Installation
+
+```bash
+pip install -r requirements.txt
+export ANTHROPIC_API_KEY=your-key-here
+```
+
+### Commands
+
+#### `generate` — Natural Language → Pine Script v6
+
+```bash
+# Basic generation (prints to terminal)
+python pinescript_ai.py generate "15m SMC reversal with CHoCH + Order Block in discount zone"
+
+# Save to file
+python pinescript_ai.py generate "BTC scalper using RSI divergence" --output strategies/rsi_scalper.pine
+
+# Use a different model
+python pinescript_ai.py generate "Multi-TF trend follower" --model claude-sonnet-4-20250514
+
+# Skip post-generation validation
+python pinescript_ai.py generate "EMA crossover with volume" --output ema.pine --no-validate
+```
+
+The system prompt contains 2000+ words of genuine Pine Script v6 syntax rules, Smart Money Concepts patterns (CHoCH, BOS, Order Blocks, FVG, liquidity sweeps), risk management templates, and anti-repainting guards. Every generated strategy includes `barstate.isconfirmed`, proper `request.security()` with `lookahead_off`, and realistic commission/slippage defaults.
+
+#### `validate` — Static Analysis for Pine Script
+
+```bash
+python pinescript_ai.py validate my_strategy.pine
+```
+
+Checks for real bugs traders actually hit:
+- Missing `//@version=6` declaration
+- Deprecated functions (`security()` → `request.security()`, `study()` → `indicator()`)
+- `barmerge.lookahead_on` (future data leakage)
+- Bracket/parenthesis imbalance
+- `strategy.exit()` IDs not matching `strategy.entry()` IDs
+- Missing `barstate.isconfirmed` on entries (repainting risk)
+- No `alertcondition()` or `alert()` in strategies
+- Bare `tickerid` instead of `syminfo.tickerid`
+- Variable names shadowing Pine built-ins
+- `calc_on_every_tick=true` (unrealistic backtests)
+
+Output is a Rich table with severity (ERROR/WARN/INFO) and line numbers.
+
+#### `explain` — Strategy Analysis
+
+```bash
+python pinescript_ai.py explain examples/smc_reversal.pine
+```
+
+Returns structured analysis:
+- What the strategy does (2-3 sentences)
+- Entry conditions (bullet points)
+- Exit conditions
+- Risk management approach
+- Recommended timeframe and market
+- Key parameters to tune with suggested ranges
+
+#### `templates` — 7 Preset Strategy Prompts
+
+```bash
+python pinescript_ai.py templates
+```
+
+Shows Rich-formatted panels for each template:
+
+| # | Template | Description |
+|---|----------|-------------|
+| 1 | **SMC Reversal** | CHoCH + OB in discount zone |
+| 2 | **SMC Continuation** | BOS + FVG entry |
+| 3 | **Liquidity Sweep Reversal** | Sweep + CHoCH + OB |
+| 4 | **Multi-TF Confluence** | 1H bias + 15m entry |
+| 5 | **EMA Volume Breakout** | 20/50 cross + 1.5x volume |
+| 6 | **Funding Rate Scalper** | RSI extreme + structural level |
+| 7 | **Confluence Scorer** | Point system, enter at score >= 4 |
+
+Each template includes the exact prompt to copy-paste into `generate`.
+
+#### `backtest-summary` — Theoretical Performance Estimation
+
+```bash
+python pinescript_ai.py backtest-summary examples/confluence_scorer.pine
+```
+
+Analyzes strategy logic and estimates:
+- Expected win rate range
+- Profit factor estimate
+- Ideal market conditions
+- Weaknesses and failure modes
+- Parameter optimization suggestions
+
 ## Skills
 
 | Skill | Description | Status |
@@ -19,28 +117,10 @@ These skills encode real trading knowledge — Smart Money Concepts, funding rat
 | **DeFi Yield Analyzer** | Evaluate yield farming opportunities — APR/APY calculation, impermanent loss estimation, TVL trend analysis, protocol risk scoring. | 🔜 Planned |
 | **Risk Governor** | Build portfolio risk management systems — position sizing, correlation monitoring, drawdown protection, circuit breakers, strategy auto-kill logic. | 🔜 Planned |
 
-## Installation
+## Example Strategies
 
-Clone this repo into your Claude Code skills directory:
-
-```bash
-git clone https://github.com/YOUR_USERNAME/crypto-trading-skills.git
-```
-
-Then reference individual skills in your Claude Code workflow:
-
-```
-Read the skill at crypto-trading-skills/skills/pinescript-generator/SKILL.md and use it to generate a 15-minute SMC reversal strategy with CHoCH entries and Order Block confirmation.
-```
-
-## Example: Pine Script Generation
-
-**Prompt:**
-```
-Generate a Pine Script v6 strategy: 15-minute timeframe, enter long on bullish CHoCH with Order Block confirmation from 1H, use ATR-based stop loss at 1.5x ATR below entry, take profit at 2R. Include alert conditions.
-```
-
-**Output:** A compilable Pine Script v6 strategy with proper structure, MTF confirmation via `request.security()`, ATR-based risk management, and TradingView alert conditions — ready to paste into TradingView and run.
+- **`examples/smc_reversal.pine`** — CHoCH + Order Block entry with ATR stops, discount/premium zone filter
+- **`examples/confluence_scorer.pine`** — Point-based multi-factor system (CHoCH +2, OB +2, FVG +1, zone +1, volume +1, HTF +1), enter at configurable threshold
 
 ## Why These Skills Exist
 
@@ -56,8 +136,8 @@ The goal is to make Claude Code a useful pair programmer for traders who know wh
 ## Built With
 
 - Claude Code for skill development and testing
-- Python + CCXT for exchange connectivity
-- SQLite for trade data persistence
+- Anthropic API (Claude) for generation, explanation, and analysis
+- Python + Typer + Rich for the CLI
 - TradingView / Pine Script v6 for strategy execution
 
 ## Contributing
@@ -69,10 +149,6 @@ PRs welcome, especially for:
 - DeFi protocol-specific analyzers
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-## Related
-
-- **[SMC Scanner](https://smc-field-guide.netlify.app)** — Real-time Smart Money Concepts alerts delivered via Telegram. If you find the Pine Script skill useful, you might want live SMC signals.
 
 ## License
 
