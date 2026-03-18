@@ -13,19 +13,23 @@ dependencies = [
     "anthropic>=0.39.0",
     "typer>=0.15.0",
     "rich>=13.9.0",
+    "ccxt>=4.0.0",
 ]
 
 [project.scripts]
 pinescript-ai = "pinescript_ai:app"
+funding-scanner = "funding_scanner:app"
+trade-journal = "trade_journal:app"
 
 [project.optional-dependencies]
 dev = [
     "ruff>=0.4.0",
     "mypy>=1.10.0",
+    "pytest>=8.0.0",
 ]
 
 [tool.setuptools]
-py-modules = ["pinescript_ai"]
+py-modules = ["pinescript_ai", "funding_scanner", "trade_journal"]
 
 [tool.setuptools.package-data]
 "*" = ["examples/*.pine"]
