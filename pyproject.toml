@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pinescript-ai"
+version = "0.1.0"
+description = "Generate, validate, and analyze TradingView Pine Script v6 strategies using Claude"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.39.0",
+    "typer>=0.15.0",
+    "rich>=13.9.0",
+]
+
+[project.scripts]
+pinescript-ai = "pinescript_ai:app"
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+]
+
+[tool.setuptools]
+py-modules = ["pinescript_ai"]
+
+[tool.setuptools.package-data]
+"*" = ["examples/*.pine"]

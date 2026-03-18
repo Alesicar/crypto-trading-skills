@@ -1,0 +1,350 @@
+// ============================================================
+// Multi-Timeframe Confluence Strategy
+// 1H Bias via Market Structure + 15m CHoCH/OB Entries + RSI Filter
+// ============================================================
+// This strategy reads the higher timeframe (1H) market structure to
+// determine directional bias, then enters on the lower timeframe
+// (15m chart) only when a CHoCH + Order Block setup aligns with
+// the HTF trend direction. An RSI filter prevents entries in
+// overbought/oversold extremes against the intended direction.
+//
+// HTF bias logic:
+//   - 1H swing highs making higher highs + swing lows making higher
+//     lows = bullish bias → only take long entries on 15m
+//   - 1H swing highs making lower highs + swing lows making lower
+//     lows = bearish bias → only take short entries on 15m
+//
+// Entry logic (15m):
+//   - Bullish CHoCH detected (downtrend broken) + price retraces
+//     into bullish Order Block + RSI not overbought + HTF bullish
+//   - Bearish CHoCH detected (uptrend broken) + price retraces
+//     into bearish Order Block + RSI not oversold + HTF bearish
+//
+// Stop loss: structural — placed beyond the Order Block with an
+// ATR buffer. This is the logical invalidation level.
+//
+// Anti-repainting: barstate.isconfirmed on all entries.
+// Anti-lookahead: all request.security calls use barmerge.lookahead_off.
+// Realistic costs: 0.06% commission, 2-tick slippage.
+//
+// Best on: 15m crypto charts (BTC, ETH) with 1H as HTF.
+// ============================================================
+
+//@version=6
+strategy("MTF Confluence — 1H Bias + 15m Entry", overlay=true,
+         initial_capital=10000,
+         default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+         commission_type=strategy.commission.percent, commission_value=0.06,
+         slippage=2, calc_on_every_tick=false, process_orders_on_close=false,
+         pyramiding=0)
+
+// ============================================================
+// STEP 1: User Inputs
+// ============================================================
+
+// --- Structure ---
+swing_len   = input.int(5, "Swing Lookback (LTF)", minval=2, maxval=20,
+              tooltip="Bars on each side to confirm a 15m swing point",
+              group="Structure")
+ob_lookback = input.int(20, "OB Search Bars", minval=5, maxval=50,
+              tooltip="How far back to look for the Order Block candle",
+              group="Structure")
+
+// --- Higher Timeframe ---
+htf_tf       = input.timeframe("60", "HTF for Bias",
+               tooltip="Higher timeframe used to determine trend direction",
+               group="Multi-Timeframe")
+htf_swing_len = input.int(5, "Swing Lookback (HTF)", minval=2, maxval=20,
+                tooltip="Bars on each side to confirm a 1H swing point",
+                group="Multi-Timeframe")
+
+// --- RSI Filter ---
+rsi_len       = input.int(14, "RSI Length", group="RSI Filter")
+rsi_ob_level  = input.int(70, "RSI Overbought", minval=60, maxval=90,
+                group="RSI Filter")
+rsi_os_level  = input.int(30, "RSI Oversold", minval=10, maxval=40,
+                group="RSI Filter")
+use_rsi       = input.bool(true, "Enable RSI Filter",
+                tooltip="When on, longs blocked if RSI > overbought, shorts blocked if RSI < oversold",
+                group="RSI Filter")
+
+// --- Risk Management ---
+atr_len      = input.int(14, "ATR Length", group="Risk Management")
+atr_sl_mult  = input.float(0.3, "ATR SL Buffer", step=0.1, minval=0.1,
+               tooltip="ATR multiplier added as buffer beyond the OB for stop loss",
+               group="Risk Management")
+rr_target    = input.float(2.0, "Risk:Reward Target", step=0.1, minval=1.0,
+               group="Risk Management")
+
+// ============================================================
+// STEP 2: Core Calculations (LTF — chart timeframe)
+// ============================================================
+atr_val = ta.atr(atr_len)
+rsi_val = ta.rsi(close, rsi_len)
+
+// RSI filter conditions
+rsi_ok_long  = use_rsi ? rsi_val < rsi_ob_level : true
+rsi_ok_short = use_rsi ? rsi_val > rsi_os_level : true
+
+// ============================================================
+// STEP 3: Higher Timeframe Market Structure via request.security
+// ============================================================
+// We fetch 1H swing highs/lows and derive trend direction on the HTF.
+// All request.security calls use barmerge.lookahead_off to prevent
+// future data leakage. We compute the HTF trend inside a function
+// and pass it through request.security to avoid repainting.
+
+// HTF trend calculation function — determines trend from swing structure
+htf_trend_calc() =>
+    // Detect swing points on the HTF
+    float htf_ph = ta.pivothigh(high, htf_swing_len, htf_swing_len)
+    float htf_pl = ta.pivotlow(low, htf_swing_len, htf_swing_len)
+
+    // Track successive swing highs and lows
+    var float htf_prev_sh = na
+    var float htf_prev_sl = na
+    var int   htf_trend   = 0   // 1 = bullish, -1 = bearish
+
+    if not na(htf_ph)
+        if not na(htf_prev_sh)
+            if htf_ph > htf_prev_sh
+                htf_trend := 1    // Higher high → bullish
+            else if htf_ph < htf_prev_sh
+                htf_trend := -1   // Lower high → bearish
+        htf_prev_sh := htf_ph
+
+    if not na(htf_pl)
+        if not na(htf_prev_sl)
+            if htf_pl > htf_prev_sl
+                htf_trend := 1    // Higher low → bullish
+            else if htf_pl < htf_prev_sl
+                htf_trend := -1   // Lower low → bearish
+        htf_prev_sl := htf_pl
+
+    htf_trend
+
+// Fetch HTF trend — lookahead_off prevents seeing future bars
+htf_trend = request.security(syminfo.tickerid, htf_tf, htf_trend_calc(),
+                              barmerge.gaps_off, barmerge.lookahead_off)
+
+htf_bullish = htf_trend == 1
+htf_bearish = htf_trend == -1
+
+// ============================================================
+// STEP 4: LTF Market Structure — Swing Points (15m chart)
+// ============================================================
+var float last_sh     = na
+var float last_sl     = na
+var int   last_sh_bar = na
+var int   last_sl_bar = na
+
+ph = ta.pivothigh(high, swing_len, swing_len)
+pl = ta.pivotlow(low, swing_len, swing_len)
+
+if not na(ph)
+    last_sh     := ph
+    last_sh_bar := bar_index - swing_len
+
+if not na(pl)
+    last_sl     := pl
+    last_sl_bar := bar_index - swing_len
+
+// ============================================================
+// STEP 5: LTF Trend via Structure
+// ============================================================
+var int   ltf_trend = 0
+var float prev_sh   = na
+var float prev_sl   = na
+
+if not na(ph)
+    if not na(prev_sh)
+        if ph > prev_sh
+            ltf_trend := 1
+        else if ph < prev_sh
+            ltf_trend := -1
+    prev_sh := ph
+
+if not na(pl)
+    if not na(prev_sl)
+        if pl > prev_sl
+            ltf_trend := 1
+        else if pl < prev_sl
+            ltf_trend := -1
+    prev_sl := pl
+
+// ============================================================
+// STEP 6: CHoCH Detection on LTF
+// ============================================================
+// Bullish CHoCH: LTF was in downtrend, now price closes above last swing high
+// Bearish CHoCH: LTF was in uptrend, now price closes below last swing low
+var bool bullish_choch = false
+var bool bearish_choch = false
+
+bullish_choch := false
+bearish_choch := false
+
+if ltf_trend == -1 and not na(last_sh) and close > last_sh and barstate.isconfirmed
+    bullish_choch := true
+
+if ltf_trend == 1 and not na(last_sl) and close < last_sl and barstate.isconfirmed
+    bearish_choch := true
+
+// ============================================================
+// STEP 7: Order Block Detection on LTF
+// ============================================================
+var float bull_ob_top    = na
+var float bull_ob_bottom = na
+var bool  bull_ob_active = false
+
+var float bear_ob_top    = na
+var float bear_ob_bottom = na
+var bool  bear_ob_active = false
+
+// After bullish CHoCH, walk back to find last bearish candle (the OB)
+if bullish_choch
+    for i = 1 to ob_lookback
+        if close[i] < open[i]
+            bull_ob_top    := high[i]
+            bull_ob_bottom := low[i]
+            bull_ob_active := true
+            break
+
+// After bearish CHoCH, walk back to find last bullish candle (the OB)
+if bearish_choch
+    for i = 1 to ob_lookback
+        if close[i] > open[i]
+            bear_ob_top    := high[i]
+            bear_ob_bottom := low[i]
+            bear_ob_active := true
+            break
+
+// Mitigate OBs when price closes through them
+if bull_ob_active and close < bull_ob_bottom
+    bull_ob_active := false
+
+if bear_ob_active and close > bear_ob_top
+    bear_ob_active := false
+
+// ============================================================
+// STEP 8: Entry Conditions — MTF Confluence
+// ============================================================
+// Long entry requires ALL:
+//   1. HTF (1H) trend is bullish
+//   2. LTF (15m) bullish CHoCH created a bullish OB (still active)
+//   3. Price has retraced into the bullish OB zone
+//   4. RSI is not overbought (momentum has room to run)
+//   5. Bar is confirmed
+long_ob_touch = bull_ob_active and low <= bull_ob_top and close >= bull_ob_bottom
+long_entry    = htf_bullish and long_ob_touch and rsi_ok_long and barstate.isconfirmed
+
+// Short entry requires ALL:
+//   1. HTF (1H) trend is bearish
+//   2. LTF (15m) bearish CHoCH created a bearish OB (still active)
+//   3. Price has retraced into the bearish OB zone
+//   4. RSI is not oversold (momentum has room to fall)
+//   5. Bar is confirmed
+short_ob_touch = bear_ob_active and high >= bear_ob_bottom and close <= bear_ob_top
+short_entry    = htf_bearish and short_ob_touch and rsi_ok_short and barstate.isconfirmed
+
+// ============================================================
+// STEP 9: Structural Stop Loss + R-Multiple Target
+// ============================================================
+// Stop is placed beyond the Order Block — this is the structural
+// invalidation level. If price closes through the OB, the setup
+// is broken and we should be out of the trade.
+long_sl   = bull_ob_bottom - atr_val * atr_sl_mult
+long_risk = math.abs(close - long_sl)
+long_tp   = close + long_risk * rr_target
+
+short_sl   = bear_ob_top + atr_val * atr_sl_mult
+short_risk = math.abs(short_sl - close)
+short_tp   = close - short_risk * rr_target
+
+// ============================================================
+// STEP 10: Execute Orders
+// ============================================================
+if long_entry
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Exit Long", from_entry="Long", stop=long_sl, limit=long_tp)
+    bull_ob_active := false   // One entry per OB
+
+if short_entry
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Exit Short", from_entry="Short", stop=short_sl, limit=short_tp)
+    bear_ob_active := false
+
+// ============================================================
+// STEP 11: Visualization
+// ============================================================
+// HTF trend background — green tint when bullish, red when bearish
+bgcolor(htf_bullish ? color.new(color.green, 95) : htf_bearish ? color.new(color.red, 95) : na,
+        title="HTF Trend Background")
+
+// Swing point markers on the LTF chart
+plotshape(not na(ph), title="Swing High", style=shape.triangledown,
+          location=location.abovebar, color=color.new(color.red, 20),
+          size=size.tiny, offset=-swing_len)
+plotshape(not na(pl), title="Swing Low", style=shape.triangleup,
+          location=location.belowbar, color=color.new(color.green, 20),
+          size=size.tiny, offset=-swing_len)
+
+// CHoCH event markers
+plotshape(bullish_choch, title="Bullish CHoCH", style=shape.labelup,
+          location=location.belowbar, color=color.new(color.teal, 0),
+          text="CHoCH", textcolor=color.white, size=size.small)
+plotshape(bearish_choch, title="Bearish CHoCH", style=shape.labeldown,
+          location=location.abovebar, color=color.new(color.maroon, 0),
+          text="CHoCH", textcolor=color.white, size=size.small)
+
+// OB zone highlighting
+bgcolor(bull_ob_active and low <= bull_ob_top and close >= bull_ob_bottom ?
+        color.new(color.teal, 85) : na, title="Bull OB Zone")
+bgcolor(bear_ob_active and high >= bear_ob_bottom and close <= bear_ob_top ?
+        color.new(color.maroon, 85) : na, title="Bear OB Zone")
+
+// RSI plot in a separate pane for monitoring
+plot(rsi_val, "RSI", color=color.new(color.purple, 0), display=display.pane)
+hline(rsi_ob_level, "RSI Overbought", color=color.red, linestyle=hline.style_dashed)
+hline(rsi_os_level, "RSI Oversold", color=color.green, linestyle=hline.style_dashed)
+hline(50, "RSI Midline", color=color.gray, linestyle=hline.style_dotted)
+
+// Entry labels with trade details
+if long_entry
+    label.new(bar_index, low - atr_val * 0.5,
+              "LONG\nHTF:Bull\nRSI:" + str.tostring(rsi_val, "#.#") +
+              "\nSL:" + str.tostring(long_sl, "#.##") +
+              "\nTP:" + str.tostring(long_tp, "#.##"),
+              style=label.style_label_up, color=color.teal,
+              textcolor=color.white, size=size.small)
+
+if short_entry
+    label.new(bar_index, high + atr_val * 0.5,
+              "SHORT\nHTF:Bear\nRSI:" + str.tostring(rsi_val, "#.#") +
+              "\nSL:" + str.tostring(short_sl, "#.##") +
+              "\nTP:" + str.tostring(short_tp, "#.##"),
+              style=label.style_label_down, color=color.maroon,
+              textcolor=color.white, size=size.small)
+
+// ============================================================
+// STEP 12: Alert Conditions
+// ============================================================
+// alertcondition — for TradingView's alert dialog
+alertcondition(long_entry, title="Long — MTF Confluence",
+               message="LONG {{ticker}} @ {{close}} | 1H bullish + 15m CHoCH+OB + RSI filter passed")
+alertcondition(short_entry, title="Short — MTF Confluence",
+               message="SHORT {{ticker}} @ {{close}} | 1H bearish + 15m CHoCH+OB + RSI filter passed")
+
+// alert() — for webhook / bot integration
+if long_entry
+    alert("LONG " + syminfo.ticker + " @ " + str.tostring(close) +
+          " | HTF: Bullish | RSI: " + str.tostring(rsi_val, "#.#") +
+          " | SL: " + str.tostring(long_sl) +
+          " | TP: " + str.tostring(long_tp),
+          alert.freq_once_per_bar_close)
+
+if short_entry
+    alert("SHORT " + syminfo.ticker + " @ " + str.tostring(close) +
+          " | HTF: Bearish | RSI: " + str.tostring(rsi_val, "#.#") +
+          " | SL: " + str.tostring(short_sl) +
+          " | TP: " + str.tostring(short_tp),
+          alert.freq_once_per_bar_close)

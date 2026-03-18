@@ -1,159 +1,145 @@
-# Crypto Trading Skills for Claude Code
+# Pine Script AI — Generate, Validate & Analyze TradingView Strategies
 
-> Production-grade Claude Code skills for crypto trading, DeFi analysis, and algorithmic strategy development. Built by a futures trader running live infrastructure, not a tutorial writer.
+> Production-grade CLI for generating, validating, and analyzing TradingView Pine Script v6 strategies using Claude with deep Smart Money Concepts knowledge.
 
-## What This Is
+## Project Structure
 
-A collection of **Claude Code skills** that give Claude deep knowledge of crypto trading, Pine Script development, on-chain analytics, and portfolio management. Each skill is a self-contained markdown file that plugs directly into Claude Code's skill system.
+```
+crypto-trading-skills/
+├── pinescript_ai.py              # CLI entry point (Typer app)
+├── pyproject.toml                # pip-installable package config
+├── requirements.txt              # Python dependencies
+├── examples/
+│   ├── smc_reversal.pine         # CHoCH + Order Block in discount zone
+│   ├── mtf_confluence.pine       # 1H bias + 15m CHoCH/OB + RSI filter
+│   └── confluence_scorer.pine    # Point system (CHoCH+2, OB+2, FVG+1, zone+1, RSI+1, vol+1)
+├── skills/
+│   └── pinescript-generator/
+│       └── SKILL.md              # Claude Code skill definition
+├── .github/
+│   └── workflows/
+│       └── ci.yml                # Validates all example .pine files on push
+├── CLAUDE.md                     # Project instructions for Claude Code
+└── README.md
+```
 
-These skills encode real trading knowledge — Smart Money Concepts, funding rate arbitrage, risk governance, position sizing — so Claude Code can generate production-quality trading tools instead of generic boilerplate.
-
-## Pine Script v6 Generator CLI
-
-The flagship tool: a Typer CLI that generates, validates, and analyzes TradingView Pine Script v6 strategies using Claude with deep SMC knowledge baked into every prompt.
-
-### Installation
+## Installation
 
 ```bash
+# From source
+pip install -e .
+
+# Or just install dependencies
 pip install -r requirements.txt
+```
+
+Set your API key for generate/explain/backtest-summary commands:
+
+```bash
 export ANTHROPIC_API_KEY=your-key-here
 ```
 
-### Commands
+## Commands
 
-#### `generate` — Natural Language → Pine Script v6
-
-```bash
-# Basic generation (prints to terminal)
-python pinescript_ai.py generate "15m SMC reversal with CHoCH + Order Block in discount zone"
-
-# Save to file
-python pinescript_ai.py generate "BTC scalper using RSI divergence" --output strategies/rsi_scalper.pine
-
-# Use a different model
-python pinescript_ai.py generate "Multi-TF trend follower" --model claude-sonnet-4-20250514
-
-# Skip post-generation validation
-python pinescript_ai.py generate "EMA crossover with volume" --output ema.pine --no-validate
-```
-
-The system prompt contains 2000+ words of genuine Pine Script v6 syntax rules, Smart Money Concepts patterns (CHoCH, BOS, Order Blocks, FVG, liquidity sweeps), risk management templates, and anti-repainting guards. Every generated strategy includes `barstate.isconfirmed`, proper `request.security()` with `lookahead_off`, and realistic commission/slippage defaults.
-
-#### `validate` — Static Analysis for Pine Script
+### `validate` — Static Analysis (offline, no API key needed)
 
 ```bash
-python pinescript_ai.py validate my_strategy.pine
+python pinescript_ai.py validate examples/smc_reversal.pine
+python pinescript_ai.py validate examples/mtf_confluence.pine
+python pinescript_ai.py validate examples/confluence_scorer.pine
 ```
 
-Checks for real bugs traders actually hit:
+Checks for:
 - Missing `//@version=6` declaration
 - Deprecated functions (`security()` → `request.security()`, `study()` → `indicator()`)
 - `barmerge.lookahead_on` (future data leakage)
 - Bracket/parenthesis imbalance
 - `strategy.exit()` IDs not matching `strategy.entry()` IDs
-- Missing `barstate.isconfirmed` on entries (repainting risk)
-- No `alertcondition()` or `alert()` in strategies
+- Missing `barstate.isconfirmed` (repainting risk)
+- No `alertcondition()` or `alert()` calls
 - Bare `tickerid` instead of `syminfo.tickerid`
 - Variable names shadowing Pine built-ins
 - `calc_on_every_tick=true` (unrealistic backtests)
 
-Output is a Rich table with severity (ERROR/WARN/INFO) and line numbers.
+### `generate` — Natural Language → Pine Script v6
 
-#### `explain` — Strategy Analysis
+```bash
+# Print to terminal
+python pinescript_ai.py generate "15m SMC reversal with CHoCH + OB in discount zone"
+
+# Save to file
+python pinescript_ai.py generate "BTC scalper using RSI divergence" -o strategies/rsi_scalper.pine
+
+# Use a different model
+python pinescript_ai.py generate "EMA crossover with volume" --model claude-sonnet-4-20250514
+```
+
+### `explain` — Structured Strategy Analysis
 
 ```bash
 python pinescript_ai.py explain examples/smc_reversal.pine
 ```
 
-Returns structured analysis:
-- What the strategy does (2-3 sentences)
-- Entry conditions (bullet points)
-- Exit conditions
-- Risk management approach
-- Recommended timeframe and market
-- Key parameters to tune with suggested ranges
+Returns entry/exit conditions, risk management approach, recommended timeframe, and key parameters to tune.
 
-#### `templates` — 7 Preset Strategy Prompts
-
-```bash
-python pinescript_ai.py templates
-```
-
-Shows Rich-formatted panels for each template:
-
-| # | Template | Description |
-|---|----------|-------------|
-| 1 | **SMC Reversal** | CHoCH + OB in discount zone |
-| 2 | **SMC Continuation** | BOS + FVG entry |
-| 3 | **Liquidity Sweep Reversal** | Sweep + CHoCH + OB |
-| 4 | **Multi-TF Confluence** | 1H bias + 15m entry |
-| 5 | **EMA Volume Breakout** | 20/50 cross + 1.5x volume |
-| 6 | **Funding Rate Scalper** | RSI extreme + structural level |
-| 7 | **Confluence Scorer** | Point system, enter at score >= 4 |
-
-Each template includes the exact prompt to copy-paste into `generate`.
-
-#### `backtest-summary` — Theoretical Performance Estimation
+### `backtest-summary` — Theoretical Performance Estimation
 
 ```bash
 python pinescript_ai.py backtest-summary examples/confluence_scorer.pine
 ```
 
-Analyzes strategy logic and estimates:
-- Expected win rate range
-- Profit factor estimate
-- Ideal market conditions
-- Weaknesses and failure modes
-- Parameter optimization suggestions
+Estimates win rate, profit factor, ideal market conditions, and weaknesses.
 
-## Skills
+### `templates` — 7 Preset Strategy Prompts
 
-| Skill | Description | Status |
-|-------|-------------|--------|
-| **Pine Script Generator** | Generate Pine Script v6 strategies from natural language. Deep SMC knowledge: CHoCH, BOS, Order Blocks, FVG, liquidity sweeps. Outputs compilable code with proper `strategy()` structure, alerts, and risk management. | ✅ Ready |
-| **Funding Rate Scanner** | Build funding rate monitoring tools across exchanges using CCXT. Spot arbitrage opportunities, calculate annualized rates, flag divergences. | 🔜 Next |
-| **Trade Journal Analyzer** | Analyze trade logs and generate performance reports — Sharpe ratio, max drawdown, profit factor, rolling win rate, strategy attribution. Works with CSV and SQLite. | 🔜 Planned |
-| **On-Chain Whale Tracker** | Query blockchain APIs, parse whale transactions, detect accumulation/distribution patterns, flag significant wallet movements. | 🔜 Planned |
-| **DeFi Yield Analyzer** | Evaluate yield farming opportunities — APR/APY calculation, impermanent loss estimation, TVL trend analysis, protocol risk scoring. | 🔜 Planned |
-| **Risk Governor** | Build portfolio risk management systems — position sizing, correlation monitoring, drawdown protection, circuit breakers, strategy auto-kill logic. | 🔜 Planned |
+```bash
+python pinescript_ai.py templates
+```
 
 ## Example Strategies
 
-- **`examples/smc_reversal.pine`** — CHoCH + Order Block entry with ATR stops, discount/premium zone filter
-- **`examples/confluence_scorer.pine`** — Point-based multi-factor system (CHoCH +2, OB +2, FVG +1, zone +1, volume +1, HTF +1), enter at configurable threshold
+### 1. SMC Reversal (`examples/smc_reversal.pine`)
 
-## Why These Skills Exist
+CHoCH detection against prevailing trend + Order Block entry in the discount zone. ATR-based stop loss below the OB, 2R take-profit target. Includes alertconditions and full commenting.
 
-Most AI-generated trading code is surface-level — it compiles but doesn't reflect how real trading systems work. These skills are built from experience running live algorithmic trading infrastructure:
+- **Entry**: Bullish CHoCH → price retraces into bullish OB → discount zone filter
+- **Stop**: Below OB bottom - ATR buffer
+- **Target**: 2R from entry
+- **Best on**: 15m–1H crypto
 
-- **Pine Script strategies** tested through multi-month paper validation windows
-- **Risk governance** with circuit breakers, correlation monitoring, and strategy survival rules
-- **Funding rate arbitrage** with real spread calculations and execution timing
-- **Portfolio management** with proper attribution, drawdown tracking, and regime detection
+### 2. MTF Confluence (`examples/mtf_confluence.pine`)
 
-The goal is to make Claude Code a useful pair programmer for traders who know what they're doing, not a toy that outputs generic Moving Average crossovers.
+Uses 1H market structure (via `request.security` with `lookahead_off`) to determine trend bias. Enters on 15m CHoCH + Order Block setups aligned with HTF direction. RSI filter prevents entries in overbought/oversold extremes.
 
-## Built With
+- **Entry**: HTF bullish + LTF bullish CHoCH + OB retracement + RSI not overbought
+- **Stop**: Structural — beyond the Order Block with ATR buffer
+- **Target**: 2R from entry
+- **Best on**: 15m chart with 1H HTF
 
-- Claude Code for skill development and testing
-- Anthropic API (Claude) for generation, explanation, and analysis
-- Python + Typer + Rich for the CLI
-- TradingView / Pine Script v6 for strategy execution
+### 3. Confluence Scorer (`examples/confluence_scorer.pine`)
 
-## Contributing
+Point-based multi-factor system. Awards points for: CHoCH (+2), Order Block (+2), FVG (+1), premium/discount zone (+1), RSI (+1), volume (+1). Enters when score reaches configurable threshold (default: 4/8). Labels on chart show score breakdown at each entry.
 
-PRs welcome, especially for:
-- New exchange-specific skills (Bybit, Binance, Hyperliquid)
-- Additional SMC pattern implementations
-- Backtesting and optimization skills
-- DeFi protocol-specific analyzers
+- **Entry**: Score >= threshold (configurable per side)
+- **Stop**: ATR-based (1.5x ATR below/above entry)
+- **Target**: 2R from entry
+- **Best on**: 15m–1H crypto
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+## Key Conventions
+
+All generated and example strategies follow these rules:
+
+- **Pine Script v6** (`//@version=6`) — always
+- **`barstate.isconfirmed`** on all entries — prevents repainting
+- **`barmerge.lookahead_off`** on all `request.security()` — prevents future data leakage
+- **Realistic costs**: 0.06% commission (Binance/Bybit taker), 2-tick slippage
+- **`calc_on_every_tick=false`** — prevents intra-bar recalculation
+- **`process_orders_on_close=false`** — prevents close-price lookahead
+
+## CI
+
+GitHub Actions runs `python pinescript_ai.py validate` against all example `.pine` files on every push. See `.github/workflows/ci.yml`.
 
 ## License
 
-MIT — use these skills however you want.
-
----
-
-*Built on train commutes in Slovenia. Skills are extracted from production trading systems, not tutorials.*
+MIT
