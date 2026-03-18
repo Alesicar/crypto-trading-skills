@@ -2,6 +2,26 @@
 
 > Production-grade CLI for generating, validating, and analyzing TradingView Pine Script v6 strategies using Claude with deep Smart Money Concepts knowledge.
 
+## Quick Start
+
+```bash
+pip install -e .
+pinescript-dashboard
+```
+
+That's it. One command gives you a live-refreshing terminal dashboard with:
+- **Funding Rates** — top 10 extreme rates from Bybit, color-coded
+- **Recent Signals** — last 10 webhook alerts from your signal database
+- **Portfolio Stats** — today's signal count, most active strategy/symbol, long/short ratio
+- **System Status** — installed tools, webhook server health, last signal age, DB size
+
+Options:
+```bash
+pinescript-dashboard --no-refresh    # Single snapshot, no live refresh
+pinescript-dashboard --port 9090     # Check custom webhook port
+pinescript-dashboard --db my.db      # Use a different database file
+```
+
 ## Project Structure
 
 ```
@@ -10,6 +30,7 @@ crypto-trading-skills/
 ├── funding_scanner.py            # Funding rate scanner CLI (CCXT + Typer)
 ├── trade_journal.py              # Trade journal analyzer CLI (Typer)
 ├── webhook_bridge.py             # TradingView webhook receiver (FastAPI + Typer)
+├── dashboard.py                  # Unified Rich dashboard (all tools in one view)
 ├── sample_trades.csv             # 50 sample crypto futures trades
 ├── example_payload.json          # Example TradingView webhook JSON payload
 ├── pyproject.toml                # pip-installable package config
@@ -315,6 +336,30 @@ python trade_journal.py analyze signals.csv
 ```bash
 pytest tests/test_webhook_bridge.py -v
 ```
+
+---
+
+## Dashboard (`dashboard.py`)
+
+> Unified Rich dashboard that combines all tools into one live-refreshing terminal view. The screenshot tool — one command to see everything at a glance.
+
+```bash
+pinescript-dashboard              # Live dashboard, refreshes every 30s
+python dashboard.py               # Same thing without pip install
+python dashboard.py --no-refresh  # Single snapshot
+python dashboard.py --port 9090   # Check custom webhook port
+```
+
+**4 panels, one screen:**
+
+| Panel | What it shows |
+|-------|--------------|
+| **Funding Rates** (top left) | Top 10 extreme funding rates from Bybit, color-coded by severity |
+| **Recent Signals** (top right) | Last 10 webhook signals — time, symbol, side, strategy, price |
+| **Portfolio Stats** (bottom left) | Signals today, most active strategy/symbol, long/short ratio |
+| **System Status** (bottom right) | Installed tools, webhook server health, last signal age, DB size |
+
+Auto-refreshes every 30 seconds with Rich Live display. Use `--no-refresh` for a single snapshot (useful for screenshots or piping).
 
 ## License
 
