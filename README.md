@@ -9,7 +9,9 @@ crypto-trading-skills/
 ├── pinescript_ai.py              # Pine Script generator CLI (Typer app)
 ├── funding_scanner.py            # Funding rate scanner CLI (CCXT + Typer)
 ├── trade_journal.py              # Trade journal analyzer CLI (Typer)
+├── webhook_bridge.py             # TradingView webhook receiver (FastAPI + Typer)
 ├── sample_trades.csv             # 50 sample crypto futures trades
+├── example_payload.json          # Example TradingView webhook JSON payload
 ├── pyproject.toml                # pip-installable package config
 ├── requirements.txt              # Python dependencies
 ├── examples/
@@ -21,10 +23,13 @@ crypto-trading-skills/
 │   │   └── SKILL.md              # Pine Script generator skill docs
 │   ├── funding-scanner/
 │   │   └── SKILL.md              # Funding rate concepts & usage
-│   └── trade-journal/
-│       └── SKILL.md              # Trade analysis concepts & usage
+│   ├── trade-journal/
+│   │   └── SKILL.md              # Trade analysis concepts & usage
+│   └── webhook-bridge/
+│       └── SKILL.md              # Webhook bridge setup & payload docs
 ├── tests/
-│   └── test_trade_journal.py     # Trade journal unit tests
+│   ├── test_trade_journal.py     # Trade journal unit tests
+│   └── test_webhook_bridge.py    # Webhook bridge unit tests
 ├── .github/
 │   └── workflows/
 │       └── ci.yml                # Validates all example .pine files on push
@@ -232,6 +237,83 @@ python trade_journal.py export sample_trades.csv -o report.md
 
 ```bash
 pytest tests/test_trade_journal.py -v
+```
+
+---
+
+## Webhook Bridge (`webhook_bridge.py`)
+
+> Receive TradingView webhook alerts, log to SQLite, optionally forward to Telegram. Completes the full loop: generate → deploy → catch signals → analyze.
+
+### `serve` — Start Webhook Server
+
+```bash
+python webhook_bridge.py serve                              # Default port 8080
+python webhook_bridge.py serve --port 9090                  # Custom port
+python webhook_bridge.py serve --telegram-token TOKEN --telegram-chat-id CHAT_ID
+```
+
+Accepts `POST /webhook` with JSON body:
+
+```json
+{
+  "symbol": "BTCUSDT",
+  "side": "buy",
+  "price": 65000.00,
+  "strategy_name": "smc_reversal",
+  "message": "CHoCH detected on 15m"
+}
+```
+
+See `example_payload.json` for the full format and `skills/webhook-bridge/SKILL.md` for TradingView alert setup instructions.
+
+### `history` — View Recent Signals
+
+```bash
+python webhook_bridge.py history                # Last 20 signals
+python webhook_bridge.py history --last 50      # Last 50
+```
+
+### `export` — Dump to CSV (trade_journal.py compatible)
+
+```bash
+python webhook_bridge.py export                         # CSV to stdout
+python webhook_bridge.py export -o signals.csv          # Save to file
+python webhook_bridge.py export | python trade_journal.py analyze /dev/stdin
+```
+
+### `stats` — Quick Summary
+
+```bash
+python webhook_bridge.py stats
+```
+
+Shows signals per strategy, per symbol, per day, and last signal time.
+
+### Full Loop Example
+
+```bash
+# 1. Generate a strategy
+python pinescript_ai.py generate "15m SMC reversal with CHoCH + OB" -o strategy.pine
+
+# 2. Deploy to TradingView, set up webhook alerts pointing to your server
+
+# 3. Run the webhook bridge
+python webhook_bridge.py serve
+
+# 4. Signals are logged automatically. View them:
+python webhook_bridge.py history
+python webhook_bridge.py stats
+
+# 5. Export and analyze performance
+python webhook_bridge.py export -o signals.csv
+python trade_journal.py analyze signals.csv
+```
+
+### Tests
+
+```bash
+pytest tests/test_webhook_bridge.py -v
 ```
 
 ## License

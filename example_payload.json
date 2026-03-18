@@ -1,0 +1,7 @@
+{
+  "symbol": "BTCUSDT",
+  "side": "buy",
+  "price": 65000.00,
+  "strategy_name": "smc_reversal",
+  "message": "CHoCH detected on 15m — bullish OB in discount zone"
+}
