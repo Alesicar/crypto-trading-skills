@@ -1,0 +1,110 @@
+// ============================================================
+// FVG Highlighter — Fair Value Gap Detection with Fill Tracking
+// ============================================================
+// Detects Fair Value Gaps (3-candle imbalances) and draws them
+// as boxes on the chart. Tracks whether each FVG has been filled
+// by subsequent price action.
+//   - Bullish FVG: low[0] > high[2] — price moved up too fast
+//   - Bearish FVG: high[0] < low[2] — price moved down too fast
+// Filled FVGs change color; unfilled FVGs extend forward.
+//
+// Best on: 5m–1H crypto/forex charts.
+// ============================================================
+
+//@version=6
+indicator("FVG Highlighter", overlay=true, max_boxes_count=500)
+
+// ── Inputs ──────────────────────────────────────────────────
+show_filled  = input.bool(true, "Show Filled FVGs", group="Display")
+max_fvgs     = input.int(15, "Max Active FVGs", minval=1, maxval=50, group="Display")
+bull_col     = input.color(color.teal, "Bullish FVG Color", group="Display")
+bear_col     = input.color(color.orange, "Bearish FVG Color", group="Display")
+filled_col   = input.color(color.gray, "Filled FVG Color", group="Display")
+
+// ── FVG Detection ──────────────────────────────────────────
+// Bullish FVG: gap between current candle low and 2-bars-ago high
+bull_fvg = low > high[2]
+bull_fvg_top = low        // Upper edge of the gap
+bull_fvg_bot = high[2]    // Lower edge of the gap
+
+// Bearish FVG: gap between current candle high and 2-bars-ago low
+bear_fvg = high < low[2]
+bear_fvg_top = low[2]     // Upper edge of the gap
+bear_fvg_bot = high       // Lower edge of the gap
+
+// ── FVG Storage ────────────────────────────────────────────
+// Arrays to track boxes and fill status
+var array<box>  bull_boxes  = array.new<box>()
+var array<bool> bull_filled = array.new<bool>()
+var array<box>  bear_boxes  = array.new<box>()
+var array<bool> bear_filled = array.new<bool>()
+
+// ── Create FVG Boxes ───────────────────────────────────────
+if bull_fvg and barstate.isconfirmed
+    b = box.new(bar_index - 2, bull_fvg_top, bar_index, bull_fvg_bot,
+                bgcolor=color.new(bull_col, 80),
+                border_color=bull_col, border_width=1)
+    array.push(bull_boxes, b)
+    array.push(bull_filled, false)
+
+if bear_fvg and barstate.isconfirmed
+    b = box.new(bar_index - 2, bear_fvg_top, bar_index, bear_fvg_bot,
+                bgcolor=color.new(bear_col, 80),
+                border_color=bear_col, border_width=1)
+    array.push(bear_boxes, b)
+    array.push(bear_filled, false)
+
+// ── Fill Tracking ──────────────────────────────────────────
+// Bullish FVG is filled when price drops into the gap (low <= top)
+if array.size(bull_boxes) > 0
+    for i = array.size(bull_boxes) - 1 to 0
+        if not array.get(bull_filled, i)
+            b = array.get(bull_boxes, i)
+            fvg_top = box.get_top(b)
+            // Filled when price enters the gap from above
+            if low <= fvg_top
+                array.set(bull_filled, i, true)
+                if show_filled
+                    box.set_bgcolor(b, color.new(filled_col, 90))
+                    box.set_border_color(b, filled_col)
+                else
+                    box.delete(b)
+                    array.remove(bull_boxes, i)
+                    array.remove(bull_filled, i)
+                    continue
+            else
+                // Extend unfilled FVGs forward
+                box.set_right(b, bar_index)
+
+// Bearish FVG is filled when price rises into the gap (high >= bottom)
+if array.size(bear_boxes) > 0
+    for i = array.size(bear_boxes) - 1 to 0
+        if not array.get(bear_filled, i)
+            b = array.get(bear_boxes, i)
+            fvg_bot = box.get_bottom(b)
+            if high >= fvg_bot
+                array.set(bear_filled, i, true)
+                if show_filled
+                    box.set_bgcolor(b, color.new(filled_col, 90))
+                    box.set_border_color(b, filled_col)
+                else
+                    box.delete(b)
+                    array.remove(bear_boxes, i)
+                    array.remove(bear_filled, i)
+                    continue
+            else
+                box.set_right(b, bar_index)
+
+// ── Limit Active FVGs ──────────────────────────────────────
+while array.size(bull_boxes) > max_fvgs
+    box.delete(array.shift(bull_boxes))
+    array.shift(bull_filled)
+while array.size(bear_boxes) > max_fvgs
+    box.delete(array.shift(bear_boxes))
+    array.shift(bear_filled)
+
+// ── Alerts ─────────────────────────────────────────────────
+alertcondition(bull_fvg, title="Bullish FVG", message="Bullish FVG detected on {{ticker}}")
+alertcondition(bear_fvg, title="Bearish FVG", message="Bearish FVG detected on {{ticker}}")
+
+// Want real-time SMC alerts? → smc-field-guide.netlify.app

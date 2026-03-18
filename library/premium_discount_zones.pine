@@ -1,0 +1,78 @@
+// ============================================================
+// Premium & Discount Zones — Swing Range Shading
+// ============================================================
+// Divides the recent price range into premium (above equilibrium)
+// and discount (below equilibrium) zones. Institutional traders
+// buy in discount and sell in premium.
+//
+// Equilibrium = midpoint of the highest high and lowest low
+// over the lookback period. Zones are shaded on the chart
+// with the equilibrium line plotted for reference.
+//
+// Best on: 15m–4H crypto/forex charts.
+// ============================================================
+
+//@version=6
+indicator("Premium & Discount Zones", overlay=true)
+
+// ── Inputs ──────────────────────────────────────────────────
+range_len    = input.int(50, "Range Lookback", minval=10, maxval=200,
+                tooltip="Bars to calculate the high-low range",
+                group="Settings")
+show_fib     = input.bool(true, "Show 25%/75% Levels", group="Display")
+premium_col  = input.color(color.red, "Premium Zone Color", group="Display")
+discount_col = input.color(color.green, "Discount Zone Color", group="Display")
+eq_col       = input.color(color.gray, "Equilibrium Color", group="Display")
+
+// ── Zone Calculation ───────────────────────────────────────
+range_high  = ta.highest(high, range_len)
+range_low   = ta.lowest(low, range_len)
+equilibrium = (range_high + range_low) / 2.0
+range_size  = range_high - range_low
+
+// Fibonacci-style quarter levels
+level_75 = range_low + range_size * 0.75   // Deep premium
+level_25 = range_low + range_size * 0.25   // Deep discount
+
+// Zone identification
+in_premium  = close > equilibrium
+in_discount = close <= equilibrium
+
+// ── Visualization ──────────────────────────────────────────
+// Background shading for premium and discount zones
+bgcolor(in_premium ? color.new(premium_col, 92) : na, title="Premium Zone")
+bgcolor(in_discount ? color.new(discount_col, 92) : na, title="Discount Zone")
+
+// Equilibrium line
+plot(equilibrium, "Equilibrium", color=eq_col, linewidth=2, style=plot.style_line)
+
+// Range boundaries
+plot(range_high, "Range High", color=color.new(premium_col, 50), linewidth=1, style=plot.style_circles)
+plot(range_low, "Range Low", color=color.new(discount_col, 50), linewidth=1, style=plot.style_circles)
+
+// Optional 25%/75% levels for deep zones
+plot(show_fib ? level_75 : na, "75% (Deep Premium)", color=color.new(premium_col, 60),
+     linewidth=1, style=plot.style_cross)
+plot(show_fib ? level_25 : na, "25% (Deep Discount)", color=color.new(discount_col, 60),
+     linewidth=1, style=plot.style_cross)
+
+// ── Info Label ─────────────────────────────────────────────
+// Show current zone status on the last bar
+var label info_lbl = na
+if barstate.islast
+    label.delete(info_lbl)
+    zone_text = in_premium ? "PREMIUM" : "DISCOUNT"
+    zone_col  = in_premium ? premium_col : discount_col
+    pct = (close - range_low) / range_size * 100
+    info_lbl := label.new(bar_index + 3, equilibrium,
+                          zone_text + "\n" + str.tostring(pct, "#.0") + "% of range",
+                          style=label.style_label_left, color=zone_col,
+                          textcolor=color.white, size=size.normal)
+
+// ── Alerts ─────────────────────────────────────────────────
+alertcondition(ta.crossover(close, equilibrium), title="Enter Premium",
+               message="{{ticker}} crossed into premium zone")
+alertcondition(ta.crossunder(close, equilibrium), title="Enter Discount",
+               message="{{ticker}} crossed into discount zone")
+
+// Want real-time SMC alerts? → smc-field-guide.netlify.app

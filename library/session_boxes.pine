@@ -1,0 +1,124 @@
+// ============================================================
+// Session Boxes — London / New York / Tokyo with Volume
+// ============================================================
+// Draws colored boxes around major trading sessions and
+// displays cumulative volume for each session. Helps identify
+// which session drives the most activity and range.
+//
+// Sessions (UTC):
+//   Tokyo:  00:00–09:00
+//   London: 07:00–16:00
+//   New York: 13:00–22:00
+//
+// Best on: 5m–1H crypto/forex charts.
+// ============================================================
+
+//@version=6
+indicator("Session Boxes", overlay=true, max_boxes_count=500, max_labels_count=500)
+
+// ── Inputs ──────────────────────────────────────────────────
+show_tokyo  = input.bool(true, "Show Tokyo Session", group="Sessions")
+show_london = input.bool(true, "Show London Session", group="Sessions")
+show_ny     = input.bool(true, "Show New York Session", group="Sessions")
+
+tokyo_col   = input.color(color.purple, "Tokyo Color", group="Colors")
+london_col  = input.color(color.blue, "London Color", group="Colors")
+ny_col      = input.color(color.orange, "New York Color", group="Colors")
+
+show_vol    = input.bool(true, "Show Session Volume", group="Display")
+
+// ── Session Time Detection ─────────────────────────────────
+// Using UTC-based session strings
+in_tokyo  = not na(time(timeframe.period, "0000-0900", "America/New_York")) ? false : not na(time(timeframe.period, "0000-0900", "Etc/UTC"))
+in_london = not na(time(timeframe.period, "0700-1600", "Etc/UTC"))
+in_ny     = not na(time(timeframe.period, "1300-2200", "Etc/UTC"))
+
+// Simplified: detect session using UTC
+is_tokyo  = show_tokyo and not na(time(timeframe.period, "0000-0900", "Etc/UTC"))
+is_london = show_london and not na(time(timeframe.period, "0700-1600", "Etc/UTC"))
+is_ny     = show_ny and not na(time(timeframe.period, "1300-2200", "Etc/UTC"))
+
+// ── Session State Tracking ─────────────────────────────────
+var float  tk_high = na
+var float  tk_low  = na
+var float  tk_vol  = 0.0
+var int    tk_start = na
+var bool   tk_active = false
+
+var float  ld_high = na
+var float  ld_low  = na
+var float  ld_vol  = 0.0
+var int    ld_start = na
+var bool   ld_active = false
+
+var float  ny_high = na
+var float  ny_low  = na
+var float  ny_vol  = 0.0
+var int    ny_start = na
+var bool   ny_active = false
+
+// ── Tokyo Session ──────────────────────────────────────────
+if is_tokyo
+    if not tk_active
+        tk_high   := high
+        tk_low    := low
+        tk_vol    := volume
+        tk_start  := bar_index
+        tk_active := true
+    else
+        tk_high := math.max(tk_high, high)
+        tk_low  := math.min(tk_low, low)
+        tk_vol  += volume
+else if tk_active
+    // Session ended — draw the box
+    box.new(tk_start, tk_high, bar_index - 1, tk_low,
+            bgcolor=color.new(tokyo_col, 90), border_color=tokyo_col, border_width=1)
+    if show_vol
+        label.new(tk_start, tk_high, "TK Vol: " + str.tostring(tk_vol, format.volume),
+                  style=label.style_label_down, color=tokyo_col,
+                  textcolor=color.white, size=size.tiny)
+    tk_active := false
+
+// ── London Session ─────────────────────────────────────────
+if is_london
+    if not ld_active
+        ld_high   := high
+        ld_low    := low
+        ld_vol    := volume
+        ld_start  := bar_index
+        ld_active := true
+    else
+        ld_high := math.max(ld_high, high)
+        ld_low  := math.min(ld_low, low)
+        ld_vol  += volume
+else if ld_active
+    box.new(ld_start, ld_high, bar_index - 1, ld_low,
+            bgcolor=color.new(london_col, 90), border_color=london_col, border_width=1)
+    if show_vol
+        label.new(ld_start, ld_high, "LN Vol: " + str.tostring(ld_vol, format.volume),
+                  style=label.style_label_down, color=london_col,
+                  textcolor=color.white, size=size.tiny)
+    ld_active := false
+
+// ── New York Session ───────────────────────────────────────
+if is_ny
+    if not ny_active
+        ny_high   := high
+        ny_low    := low
+        ny_vol    := volume
+        ny_start  := bar_index
+        ny_active := true
+    else
+        ny_high := math.max(ny_high, high)
+        ny_low  := math.min(ny_low, low)
+        ny_vol  += volume
+else if ny_active
+    box.new(ny_start, ny_high, bar_index - 1, ny_low,
+            bgcolor=color.new(ny_col, 90), border_color=ny_col, border_width=1)
+    if show_vol
+        label.new(ny_start, ny_high, "NY Vol: " + str.tostring(ny_vol, format.volume),
+                  style=label.style_label_down, color=ny_col,
+                  textcolor=color.white, size=size.tiny)
+    ny_active := false
+
+// Want real-time SMC alerts? → smc-field-guide.netlify.app
